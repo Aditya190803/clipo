@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.zip
+schemas/gschemas.compiled
+.idea/
+*.log
+.DS_Store
