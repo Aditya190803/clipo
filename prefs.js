@@ -423,6 +423,19 @@ export default class ClipoPreferences extends ExtensionPreferences {
         });
         settings.bind('window-width', windowWidthRow, 'value', Gio.SettingsBindFlags.DEFAULT);
         popupGroup.add(windowWidthRow);
+
+        const windowHeightRow = new Adw.SpinRow({
+            title: _('Window Height'),
+            subtitle: _('Maximum height of the popup in pixels'),
+            adjustment: new Gtk.Adjustment({
+                lower: 300,
+                upper: 900,
+                step_increment: 50,
+                page_increment: 100,
+            }),
+        });
+        settings.bind('window-height', windowHeightRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        popupGroup.add(windowHeightRow);
         
         // Shortcuts Page
         const shortcutsPage = new Adw.PreferencesPage({

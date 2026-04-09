@@ -34,6 +34,15 @@ const OCR_TEXT_MATCH_WINDOW_MS = 3000;
 const OCR_MIN_TEXT_LENGTH = 8;
 const TEXT_EXTRACTOR_SCREENSHOT_DIR = GLib.build_filenamev([GLib.get_home_dir(), 'Pictures', 'Screenshots', 'TextExtractor']);
 const POPUP_EDGE_MARGIN = 16;
+const IMAGE_MIME_TYPES = [
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp',
+    'image/gif',
+    'image/bmp',
+    'image/tiff',
+];
 
 /**
  * Format a timestamp as a relative time string
@@ -91,6 +100,27 @@ function getByteLength(data) {
         return data.get_size();
 
     return data.length ?? 0;
+}
+
+function bytesEqual(left, right) {
+    const leftLength = getByteLength(left);
+    const rightLength = getByteLength(right);
+
+    if (leftLength !== rightLength)
+        return false;
+
+    if (leftLength === 0)
+        return true;
+
+    const leftBytes = left instanceof GLib.Bytes ? left.toArray() : left;
+    const rightBytes = right instanceof GLib.Bytes ? right.toArray() : right;
+
+    for (let i = 0; i < leftLength; i++) {
+        if (leftBytes[i] !== rightBytes[i])
+            return false;
+    }
+
+    return true;
 }
 
 // Sensitive content patterns
@@ -432,7 +462,7 @@ class ClipboardItem extends St.BoxLayout {
         });
 
         infoBox.add_child(new St.Label({
-            text: _('Screenshot'),
+            text: _('Image'),
             style_class: 'clipo-image-label',
             x_expand: true,
         }));
@@ -656,14 +686,26 @@ class ClipboardItem extends St.BoxLayout {
             return;
         }
         
-        const lowerPreview = preview.toLowerCase();
-        const lowerSearch = searchQuery.toLowerCase();
-        const idx = lowerPreview.indexOf(lowerSearch);
+        const regex = this._indicator?._buildSearchRegex(searchQuery) || null;
+        let idx = -1;
+        let matchLength = searchQuery.length;
+
+        if (regex) {
+            const match = preview.match(regex);
+            if (match && typeof match.index === 'number') {
+                idx = match.index;
+                matchLength = match[0].length;
+            }
+        } else {
+            const lowerPreview = preview.toLowerCase();
+            const lowerSearch = searchQuery.toLowerCase();
+            idx = lowerPreview.indexOf(lowerSearch);
+        }
         
         if (idx >= 0) {
             const before = GLib.markup_escape_text(preview.substring(0, idx), -1);
-            const match = GLib.markup_escape_text(preview.substring(idx, idx + searchQuery.length), -1);
-            const after = GLib.markup_escape_text(preview.substring(idx + searchQuery.length), -1);
+            const match = GLib.markup_escape_text(preview.substring(idx, idx + matchLength), -1);
+            const after = GLib.markup_escape_text(preview.substring(idx + matchLength), -1);
             
             const markup = `${before}<span background="#0a84ff44">${match}</span>${after}`;
             this._label.clutter_text.set_markup(markup);
@@ -1090,6 +1132,8 @@ class ClipboardIndicator extends PanelMenu.Button {
                 }
             });
         
+        this._pruneHistory();
+        this._store.syncFromLists(this._history.toArray(), this._pinned.toArray());
         this._refreshMenu();
     }
     
@@ -1109,6 +1153,19 @@ class ClipboardIndicator extends PanelMenu.Button {
                 case 'window-height':
                     if (this._scrollView)
                         this._scrollView.style = `height: ${settings.get_int('window-height')}px`;
+                    break;
+                case 'history-size':
+                case 'cache-size':
+                    this._pruneHistory();
+                    this._refreshMenu();
+                    break;
+                case 'persist-history':
+                case 'save-only-pinned':
+                    this._store.syncFromLists(this._history.toArray(), this._pinned.toArray());
+                    break;
+                case 'preview-lines':
+                case 'show-thumbnails':
+                    this._refreshMenu();
                     break;
             }
         });
@@ -1176,26 +1233,36 @@ class ClipboardIndicator extends PanelMenu.Button {
     
     _queryClipboard() {
         if (this._settings.get_boolean('enable-images')) {
-            this._clipboard.get_content(
-                CLIPBOARD_TYPE,
-                'image/png',
-                (clipboard, bytes) => {
-                    if (bytes && bytes.get_size() > 0) {
-                        const imageData = bytes.get_data();
-                        if (this._settings.get_boolean('has-text-extractor-extension') &&
-                            this._hasRecentTextExtractorScreenshotSignal()) {
-                            this._schedulePendingImageCapture(imageData);
-                        } else {
-                            this._processImageContent(imageData);
-                        }
-                    } else {
-                        this._queryTextClipboard();
-                    }
-                }
-            );
+            this._queryImageClipboard();
         } else {
             this._queryTextClipboard();
         }
+    }
+
+    _queryImageClipboard(mimeTypes = IMAGE_MIME_TYPES, index = 0) {
+        if (index >= mimeTypes.length) {
+            this._queryTextClipboard();
+            return;
+        }
+
+        const mimeType = mimeTypes[index];
+        this._clipboard.get_content(
+            CLIPBOARD_TYPE,
+            mimeType,
+            (clipboard, bytes) => {
+                if (bytes && bytes.get_size() > 0) {
+                    const imageData = bytes.get_data();
+                    if (this._settings.get_boolean('has-text-extractor-extension') &&
+                        this._hasRecentTextExtractorScreenshotSignal()) {
+                        this._schedulePendingImageCapture(imageData);
+                    } else {
+                        this._processImageContent(imageData);
+                    }
+                } else {
+                    this._queryImageClipboard(mimeTypes, index + 1);
+                }
+            }
+        );
     }
     
     _queryTextClipboard() {
@@ -1240,12 +1307,11 @@ class ClipboardIndicator extends PanelMenu.Button {
         }
         
         if (this._settings.get_boolean('deduplicate')) {
-            const hash = this._computeHash(plainText);
-            const existing = this._history.findDuplicate(hash);
+            const existing = this._findExistingTextEntry(plainText, richText);
             
-            if (existing && existing.plain === plainText) {
+            if (existing) {
                 if (this._settings.get_boolean('move-item-first')) {
-                    this._history.moveToFront(existing);
+                    this._moveEntryToFront(existing);
                     this._refreshMenu();
                 }
                 return;
@@ -1312,17 +1378,11 @@ class ClipboardIndicator extends PanelMenu.Button {
         
         // Check for duplicate images
         if (this._settings.get_boolean('deduplicate')) {
-            let hash = imageSize;
-            if (hash > 200) {
-                hash += imageData[0] + imageData[Math.floor(hash/2)] + imageData[hash-1];
-            }
-            const existing = this._history.findDuplicate(hash);
+            const existing = this._findExistingImageEntry(imageData);
             
-            if (existing && existing.type === 'image' && existing.imageData && 
-                getByteLength(existing.imageData) === imageSize) {
-                // Likely duplicate - move to front if enabled
+            if (existing) {
                 if (this._settings.get_boolean('move-item-first')) {
-                    this._history.moveToFront(existing);
+                    this._moveEntryToFront(existing);
                     this._refreshMenu();
                 }
                 return;
@@ -1452,6 +1512,48 @@ class ClipboardIndicator extends PanelMenu.Button {
         }
         return hash;
     }
+
+    _moveEntryToFront(entry) {
+        if (entry.pinned) {
+            this._pinned.moveToFront(entry);
+        } else {
+            this._history.moveToFront(entry);
+        }
+    }
+
+    _findExistingTextEntry(plainText, richText) {
+        return this._findMatchingEntry(entry =>
+            entry.type === 'text' &&
+            entry.plain === plainText &&
+            (entry.rich || null) === (richText || null)
+        );
+    }
+
+    _findExistingImageEntry(imageData) {
+        return this._findMatchingEntry(entry =>
+            entry.type === 'image' &&
+            entry.imageData &&
+            bytesEqual(entry.imageData, imageData)
+        );
+    }
+
+    _findMatchingEntry(predicate) {
+        let current = this._pinned.first;
+        while (current) {
+            if (predicate(current))
+                return current;
+            current = current.next;
+        }
+
+        current = this._history.first;
+        while (current) {
+            if (predicate(current))
+                return current;
+            current = current.next;
+        }
+
+        return null;
+    }
     
     _pruneHistory() {
         const maxSize = this._settings.get_int('history-size');
@@ -1557,7 +1659,7 @@ class ClipboardIndicator extends PanelMenu.Button {
             this._history.prepend(entry);
         }
         
-        this._store.updatePinStatus(entry, entry.pinned);
+        this._store.syncFromLists(this._history.toArray(), this._pinned.toArray());
         this._refreshMenu();
     }
     
@@ -1674,8 +1776,6 @@ class ClipboardIndicator extends PanelMenu.Button {
         }
 
         const query = this._searchEntry.get_text();
-        const queryLower = query.toLowerCase();
-        
         this._searchQuery = query;
         
         if (!query || query.length === 0) {
@@ -1689,7 +1789,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         // Search pinned first
         let current = this._pinned.first;
         while (current) {
-            if (this._matchesSearch(current, queryLower)) {
+            if (this._matchesSearch(current, query)) {
                 results.push(current);
             }
             current = current.next;
@@ -1698,7 +1798,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         // Then history
         current = this._history.first;
         while (current) {
-            if (this._matchesSearch(current, queryLower)) {
+            if (this._matchesSearch(current, query)) {
                 results.push(current);
             }
             current = current.next;
@@ -1711,9 +1811,24 @@ class ClipboardIndicator extends PanelMenu.Button {
     _matchesSearch(entry, query) {
         if (entry.type === 'image') return false;
 
-        const text = (entry.plain || '').toLowerCase();
+        const text = entry.plain || '';
+        const regex = this._buildSearchRegex(query);
+        if (regex) {
+            return regex.test(text);
+        }
 
-        return text.includes(query);
+        return text.toLowerCase().includes(query.toLowerCase());
+    }
+
+    _buildSearchRegex(query) {
+        if (!query)
+            return null;
+
+        try {
+            return new RegExp(query, 'i');
+        } catch (_) {
+            return null;
+        }
     }
     
     _refreshMenu() {

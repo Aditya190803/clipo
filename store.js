@@ -19,6 +19,19 @@ const OP_TYPE_MOVE_TO_TOP = 6;
 const COMPACT_THRESHOLD = 500; // Compact after this many wasted operations
 const FLUSH_INTERVAL = 1000; // Flush every N entries during bulk writes
 
+function toGLibBytes(data) {
+    if (!data)
+        return null;
+
+    if (data instanceof GLib.Bytes)
+        return data;
+
+    if (data instanceof Uint8Array)
+        return new GLib.Bytes(data);
+
+    return new GLib.Bytes(data);
+}
+
 export class Store {
     constructor(settings) {
         this.settings = settings;
@@ -74,6 +87,10 @@ export class Store {
     init() {
         const history = new LinkedList();
         const pinned = new LinkedList();
+
+        if (!this.settings.get_boolean('persist-history')) {
+            return { history, pinned };
+        }
         
         const dbFile = Gio.File.new_for_path(this._dbPath);
         if (!dbFile.query_exists(null)) {
@@ -352,11 +369,11 @@ export class Store {
                 Gio.FileCreateFlags.NONE,
                 null
             );
-            
-            imageStream.write_bytes(
-                new GLib.Bytes(entry.imageData),
-                null
-            );
+
+            const imageBytes = toGLibBytes(entry.imageData);
+            if (imageBytes) {
+                imageStream.write_bytes(imageBytes, null);
+            }
             imageStream.close(null);
             
             // Write to log
@@ -449,6 +466,22 @@ export class Store {
             dataStream.put_uint32(entry.diskId, null);
             
             stream.close(null);
+        });
+    }
+
+    syncFromLists(historyEntries, pinnedEntries) {
+        return this._queueOp(() => {
+            if (!this.settings.get_boolean('persist-history')) {
+                this._clearPersistedData();
+                return;
+            }
+
+            const saveOnlyPinned = this.settings.get_boolean('save-only-pinned');
+            const entries = saveOnlyPinned
+                ? [...pinnedEntries]
+                : [...pinnedEntries, ...historyEntries];
+
+            this._rewritePersistedEntries(entries);
         });
     }
     
@@ -634,5 +667,140 @@ export class Store {
         }
         
         return totalSize;
+    }
+
+    _clearPersistedData() {
+        const dbFile = Gio.File.new_for_path(this._dbPath);
+        if (dbFile.query_exists(null)) {
+            try {
+                dbFile.delete(null);
+            } catch (_) {
+                const stream = dbFile.replace(null, false, Gio.FileCreateFlags.NONE, null);
+                stream.close(null);
+            }
+        }
+
+        const imageDir = Gio.File.new_for_path(this._imageCacheDir);
+        if (imageDir.query_exists(null)) {
+            const enumerator = imageDir.enumerate_children(
+                'standard::name',
+                Gio.FileQueryInfoFlags.NONE,
+                null
+            );
+
+            let fileInfo;
+            while ((fileInfo = enumerator.next_file(null)) !== null) {
+                try {
+                    imageDir.get_child(fileInfo.get_name()).delete(null);
+                } catch (_) {
+                    // Ignore individual file deletion failures during cleanup.
+                }
+            }
+        }
+
+        this._uselessOpCount = 0;
+    }
+
+    _rewritePersistedEntries(entries) {
+        this._ensureDirectories();
+
+        const keepImagePaths = new Set();
+        for (const entry of entries) {
+            if (!entry.diskId) {
+                entry.diskId = this.getNextDiskId();
+            }
+
+            if (entry.type === 'image' && entry._imagePath) {
+                const existingImageFile = Gio.File.new_for_path(entry._imagePath);
+                if (existingImageFile.query_exists(null)) {
+                    keepImagePaths.add(entry._imagePath);
+                }
+            }
+
+            if (entry.type === 'image' && entry.imageData) {
+                if (!entry._imagePath) {
+                    entry._imagePath = GLib.build_filenamev([
+                        this._imageCacheDir,
+                        `${entry.diskId}.png`,
+                    ]);
+                }
+
+                const imageFile = Gio.File.new_for_path(entry._imagePath);
+                const imageStream = imageFile.replace(
+                    null,
+                    false,
+                    Gio.FileCreateFlags.NONE,
+                    null
+                );
+                imageStream.write_bytes(toGLibBytes(entry.imageData), null);
+                imageStream.close(null);
+                keepImagePaths.add(entry._imagePath);
+            }
+        }
+
+        const imageDir = Gio.File.new_for_path(this._imageCacheDir);
+        if (imageDir.query_exists(null)) {
+            const enumerator = imageDir.enumerate_children(
+                'standard::name',
+                Gio.FileQueryInfoFlags.NONE,
+                null
+            );
+
+            let fileInfo;
+            while ((fileInfo = enumerator.next_file(null)) !== null) {
+                const file = imageDir.get_child(fileInfo.get_name());
+                const path = file.get_path();
+                if (path && !keepImagePaths.has(path)) {
+                    try {
+                        file.delete(null);
+                    } catch (_) {
+                        // Ignore cleanup failures and continue rewriting the database.
+                    }
+                }
+            }
+        }
+
+        const file = Gio.File.new_for_path(this._dbPath);
+        const stream = file.replace(
+            null,
+            false,
+            Gio.FileCreateFlags.NONE,
+            null
+        );
+        const dataStream = Gio.DataOutputStream.new(stream);
+        dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
+
+        for (const entry of entries) {
+            if (entry.type === 'text') {
+                dataStream.put_byte(OP_TYPE_SAVE_TEXT, null);
+                dataStream.put_uint32(entry.diskId, null);
+                dataStream.put_int64(entry.timestamp, null);
+                dataStream.put_byte(entry.pinned ? 1 : 0, null);
+
+                const plainBytes = entry.plain ? new TextEncoder().encode(entry.plain) : new Uint8Array(0);
+                dataStream.put_uint32(plainBytes.length, null);
+                if (plainBytes.length > 0) {
+                    dataStream.write_bytes(new GLib.Bytes(plainBytes), null);
+                }
+
+                const richBytes = entry.rich ? new TextEncoder().encode(entry.rich) : new Uint8Array(0);
+                dataStream.put_uint32(richBytes.length, null);
+                if (richBytes.length > 0) {
+                    dataStream.write_bytes(new GLib.Bytes(richBytes), null);
+                }
+            } else if (entry.type === 'image' && entry._imagePath) {
+                dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
+                dataStream.put_uint32(entry.diskId, null);
+                dataStream.put_int64(entry.timestamp, null);
+                dataStream.put_byte(entry.pinned ? 1 : 0, null);
+
+                const pathBytes = new TextEncoder().encode(entry._imagePath);
+                dataStream.put_uint32(pathBytes.length, null);
+                dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
+            }
+        }
+
+        stream.close(null);
+        this._uselessOpCount = 0;
     }
 }
