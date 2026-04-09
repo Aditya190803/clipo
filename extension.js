@@ -168,8 +168,8 @@ class ClipboardItem extends St.BoxLayout {
             style_class: 'clipo-item-actions',
             x_expand: false,
             x_align: Clutter.ActorAlign.END,
-            y_align: Clutter.ActorAlign.FILL,
-            y_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            y_expand: false,
         });
 
         this._deleteButton = new St.Button({
@@ -180,13 +180,10 @@ class ClipboardItem extends St.BoxLayout {
             }),
             can_focus: true,
             x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.START,
+            y_align: Clutter.ActorAlign.CENTER,
         });
         this._deleteButton.connect('clicked', this._onDeleteClicked.bind(this));
         this._actionsBox.add_child(this._deleteButton);
-
-        // Spacer to push pin to the bottom
-        this._actionsBox.add_child(new St.Widget({ y_expand: true }));
 
         this._pinButton = new St.Button({
             style_class: this.entry.pinned ? 'clipo-pin-button clipo-pinned' : 'clipo-pin-button',
@@ -196,7 +193,7 @@ class ClipboardItem extends St.BoxLayout {
             }),
             can_focus: true,
             x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.CENTER,
         });
         this._pinButton.connect('clicked', this._onPinClicked.bind(this));
         this._actionsBox.add_child(this._pinButton);
@@ -1018,6 +1015,14 @@ class ClipboardIndicator extends PanelMenu.Button {
         this.menu.connect('open-state-changed', (menu, open) => {
             if (open) {
                 this._onMenuOpened();
+            } else {
+                if (this._itemsBox) {
+                    for (const item of this._itemsBox.get_children()) {
+                        if (typeof item._hideImagePreview === 'function') {
+                            item._hideImagePreview();
+                        }
+                    }
+                }
             }
         });
 
