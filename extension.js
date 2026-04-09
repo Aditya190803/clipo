@@ -182,7 +182,7 @@ class ClipboardItem extends St.BoxLayout {
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._deleteButton.connect('clicked', this._onDeleteClicked.bind(this));
+        this._wireActionButton(this._deleteButton, this._onDeleteClicked.bind(this));
         this._actionsBox.add_child(this._deleteButton);
 
         this._pinButton = new St.Button({
@@ -195,7 +195,7 @@ class ClipboardItem extends St.BoxLayout {
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._pinButton.connect('clicked', this._onPinClicked.bind(this));
+        this._wireActionButton(this._pinButton, this._onPinClicked.bind(this));
         this._actionsBox.add_child(this._pinButton);
 
         mainBox.add_child(this._actionsBox);
@@ -598,6 +598,18 @@ class ClipboardItem extends St.BoxLayout {
         }
         return preview;
     }
+
+    _wireActionButton(button, handler) {
+        button.connect('button-press-event', (actor, event) => {
+            if (event.get_button() === 1) {
+                handler();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        button.connect('button-release-event', () => Clutter.EVENT_STOP);
+    }
     
     _connectSignals() {
         this.connect('key-press-event', (actor, event) => {
@@ -864,7 +876,7 @@ class ClipboardIndicator extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._titleLabel = new St.Label({
-            text: _('Clipboard'),
+            text: _('Clipo'),
             style_class: 'clipo-header-title',
             y_align: Clutter.ActorAlign.CENTER,
         });
