@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.clipo" path="/org/gnome/shell/extensions/clipo/">
+    
+    <!-- History Settings -->
+    <key name="history-size" type="i">
+      <default>50</default>
+      <summary>Maximum history size</summary>
+      <description>Maximum number of items to keep in clipboard history</description>
+    </key>
+    
+    <key name="cache-size" type="i">
+      <default>50</default>
+      <summary>Maximum cache size (MB)</summary>
+      <description>Maximum size in megabytes for clipboard cache on disk</description>
+    </key>
+    
+    <!-- Image Settings -->
+    <key name="enable-images" type="b">
+      <default>true</default>
+      <summary>Enable image capture</summary>
+      <description>Capture images copied to clipboard</description>
+    </key>
+    
+    <key name="max-image-size" type="i">
+      <default>2</default>
+      <summary>Maximum image size (MB)</summary>
+      <description>Maximum size in megabytes for individual images</description>
+    </key>
+    
+    <!-- Behavior Settings -->
+    <key name="move-item-first" type="b">
+      <default>true</default>
+      <summary>Move selected item to top</summary>
+      <description>When selecting an item, move it to the top of history</description>
+    </key>
+    
+    <key name="close-on-select" type="b">
+      <default>true</default>
+      <summary>Close menu on selection</summary>
+      <description>Close the clipboard menu after selecting an item</description>
+    </key>
+    
+    <key name="paste-on-select" type="b">
+      <default>false</default>
+      <summary>Paste on selection</summary>
+      <description>Automatically paste when selecting an item</description>
+    </key>
+    
+    <key name="strip-whitespace" type="b">
+      <default>false</default>
+      <summary>Strip whitespace</summary>
+      <description>Remove leading and trailing whitespace from copied text</description>
+    </key>
+    
+    <key name="deduplicate" type="b">
+      <default>true</default>
+      <summary>Remove duplicates</summary>
+      <description>Remove consecutive identical clipboard entries</description>
+    </key>
+    
+    <!-- UI Settings -->
+    <key name="popup-position" type="s">
+      <default>'cursor'</default>
+      <summary>Popup position</summary>
+      <description>Where to show the clipboard popup: 'cursor' or 'center'</description>
+    </key>
+    
+    <key name="window-width" type="i">
+      <default>400</default>
+      <summary>Window width</summary>
+      <description>Width of the clipboard popup in pixels</description>
+    </key>
+    
+    <key name="window-height" type="i">
+      <default>500</default>
+      <summary>Window height</summary>
+      <description>Maximum height of the clipboard popup in pixels</description>
+    </key>
+    
+    <key name="preview-lines" type="i">
+      <default>2</default>
+      <summary>Preview lines</summary>
+      <description>Number of lines to show in item preview</description>
+    </key>
+    
+    <key name="show-thumbnails" type="b">
+      <default>true</default>
+      <summary>Show image thumbnails</summary>
+      <description>Display thumbnail previews for image items</description>
+    </key>
+
+    <key name="has-text-extractor-extension" type="b">
+      <default>false</default>
+      <summary>Text Extractor integration enabled</summary>
+      <description>When enabled, avoid storing temporary screenshots from text-extractor@aditya190803 during OCR workflows</description>
+    </key>
+    
+    <key name="top-bar-display" type="s">
+      <default>'icon'</default>
+      <summary>Top bar display mode</summary>
+      <description>What to show in top bar: 'icon', 'text', 'both', or 'none'</description>
+    </key>
+    
+    <!-- Keyboard Shortcuts -->
+    <key name="toggle-menu" type="as">
+      <default>['&lt;Super&gt;v']</default>
+      <summary>Toggle clipboard menu</summary>
+      <description>Keyboard shortcut to open/close clipboard menu</description>
+    </key>
+    
+    <key name="clear-history" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;c']</default>
+      <summary>Clear history</summary>
+      <description>Keyboard shortcut to clear clipboard history</description>
+    </key>
+    
+    <key name="toggle-private" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;p']</default>
+      <summary>Toggle private mode</summary>
+      <description>Keyboard shortcut to toggle private mode</description>
+    </key>
+    
+    <!-- Privacy Settings -->
+    <key name="private-mode" type="b">
+      <default>false</default>
+      <summary>Private mode</summary>
+      <description>When enabled, clipboard changes are not recorded</description>
+    </key>
+    
+    <key name="ignore-passwords" type="b">
+      <default>true</default>
+      <summary>Ignore password fields</summary>
+      <description>Do not capture clipboard content from password fields</description>
+    </key>
+    
+    <key name="save-only-pinned" type="b">
+      <default>false</default>
+      <summary>Save only pinned items</summary>
+      <description>Only persist pinned items to disk</description>
+    </key>
+    
+    <!-- Persistence -->
+    <key name="persist-history" type="b">
+      <default>true</default>
+      <summary>Persist history</summary>
+      <description>Save clipboard history to disk</description>
+    </key>
+    
+    <!-- Rich Text -->
+    <key name="preserve-formatting" type="b">
+      <default>true</default>
+      <summary>Preserve formatting</summary>
+      <description>Preserve rich text formatting when copying</description>
+    </key>
+    
+    <key name="prefer-plain-text" type="b">
+      <default>false</default>
+      <summary>Prefer plain text</summary>
+      <description>Always paste as plain text by default</description>
+    </key>
+    
+  </schema>
+</schemalist>
