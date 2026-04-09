@@ -1097,7 +1097,10 @@ class ClipboardIndicator extends PanelMenu.Button {
                 const isPrintable = unicode >= 0x20 && unicode !== 0x7F;
 
                 if (isPrintable) {
+                    const character = String.fromCodePoint(unicode);
                     this._searchEntry.grab_key_focus();
+                    this._searchEntry.set_text(this._searchEntry.get_text() + character);
+                    this._searchEntry.clutter_text.set_cursor_position(-1);
                     return Clutter.EVENT_STOP;
                 }
             }
