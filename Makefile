@@ -90,7 +90,8 @@ restart:
 
 pack: build
 	mkdir -p dist
-	zip -r dist/$(UUID).zip metadata.json extension.js prefs.js dataStructures.js store.js stylesheet.css schemas/
+	rm -f dist/$(UUID).zip
+	zip -r dist/$(UUID).zip metadata.json extension.js prefs.js dataStructures.js store.js stylesheet.css schemas/ -x "schemas/gschemas.compiled"
 	@echo "Extension packed to dist/$(UUID).zip"
 	@echo "Ready for upload to extensions.gnome.org"
 
