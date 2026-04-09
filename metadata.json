@@ -1,0 +1,9 @@
+{
+  "name": "Clipo",
+  "description": "Lightweight, fast, keyboard-driven clipboard manager with rich text & image support",
+  "uuid": "clipo@Aditya190803",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/Aditya190803/clipo",
+  "version": 1,
+  "settings-schema": "org.gnome.shell.extensions.clipo"
+}

@@ -1,0 +1,553 @@
+/* ── Kill the BoxPointer chrome (outer border frame) ── */
+.clipo-popup-menu .popup-menu-content {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    margin: 0;
+}
+
+/* ── Main Popup — the ONLY visible surface ─────────── */
+.clipo-popup-menu {
+    width: 400px;
+    max-height: 640px;
+    background-color: #2d2d2d;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.45),
+        0 4px 12px rgba(0, 0, 0, 0.25);
+    padding: 0;
+    margin: 0;
+}
+
+/* ── Header ──────────────────────────────────────── */
+.clipo-header {
+    padding: 0;
+    margin: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background-color: transparent;
+}
+
+.clipo-header-box {
+    padding: 14px 16px 10px 16px;
+    spacing: 10px;
+}
+
+.clipo-header-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.92);
+}
+
+/* ── Search ──────────────────────────────────────── */
+.clipo-search-container {
+    padding: 6px 12px 8px 12px;
+    margin: 0;
+    background-color: transparent;
+}
+
+.clipo-search-entry {
+    border-radius: 10px;
+    min-height: 36px;
+    padding: 6px 10px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.90);
+    caret-color: rgba(255, 255, 255, 0.85);
+    selection-background-color: rgba(10, 132, 255, 0.40);
+    selection-color: rgba(255, 255, 255, 0.95);
+    transition-duration: 120ms;
+    transition-property: border-color, background-color;
+}
+
+.clipo-search-entry:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.clipo-search-entry:focus {
+    border-color: rgba(10, 132, 255, 0.50);
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.clipo-search-icon {
+    color: rgba(255, 255, 255, 0.35);
+    icon-size: 14px;
+}
+
+/* ── Clear Button ────────────────────────────────── */
+.clipo-clear-button {
+    border-radius: 8px;
+    padding: 5px 10px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: none;
+    transition-duration: 150ms;
+    transition-property: background-color;
+}
+
+.clipo-clear-button:hover {
+    background-color: rgba(255, 59, 48, 0.18);
+}
+
+.clipo-clear-button:active {
+    background-color: rgba(255, 59, 48, 0.10);
+}
+
+.clipo-clear-label {
+    color: rgba(255, 255, 255, 0.70);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.clipo-clear-button:hover .clipo-clear-label {
+    color: rgba(255, 100, 90, 0.95);
+}
+
+/* ── Scroll Container ────────────────────────────── */
+.clipo-scroll-container {
+    padding: 0;
+    margin: 0;
+    background-color: transparent;
+}
+
+.clipo-scroll-view {
+    height: 500px;
+}
+
+.clipo-items-box {
+    padding: 4px 8px 8px 8px;
+    spacing: 4px;
+}
+
+/* ── Clipboard Item Card ─────────────────────────── */
+.clipo-item {
+    border-radius: 10px;
+    padding: 10px 12px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: none;
+    spacing: 0;
+    min-height: 56px;
+    transition-duration: 120ms;
+    transition-property: background-color;
+    overflow: hidden;
+}
+
+.clipo-item-main {
+    spacing: 10px;
+}
+
+.clipo-item:hover {
+    background-color: rgba(255, 255, 255, 0.09);
+}
+
+.clipo-item:focus {
+    background-color: rgba(255, 255, 255, 0.09);
+}
+
+.clipo-item:active {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Selected item — blue accent */
+.clipo-item-selected {
+    background-color: rgba(10, 132, 255, 0.14);
+}
+
+.clipo-item-selected:hover {
+    background-color: rgba(10, 132, 255, 0.20);
+}
+
+/* Pinned item — subtle gold tint */
+.clipo-item.clipo-pinned-item {
+    background-color: rgba(255, 214, 10, 0.06);
+}
+
+.clipo-item.clipo-pinned-item:hover {
+    background-color: rgba(255, 214, 10, 0.10);
+}
+
+/* ── Item Content ────────────────────────────────── */
+.clipo-item-content {
+    spacing: 4px;
+    min-width: 0;
+}
+
+.clipo-item-text {
+    font-size: 13px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.88);
+    line-height: 1.4;
+    min-width: 0;
+}
+
+.clipo-item-actions {
+    spacing: 2px;
+    y-align: start;
+    min-width: 36px;
+    max-width: 36px;
+    padding-left: 4px;
+}
+
+/* ── Image Items ─────────────────────────────────── */
+.clipo-image-row {
+    spacing: 10px;
+    min-width: 0;
+}
+
+.clipo-image-fallback-box {
+    min-height: 80px;
+    min-width: 60px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.clipo-image-fallback {
+    color: rgba(255, 255, 255, 0.18);
+}
+
+.clipo-thumbnail {
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background-color: rgba(0, 0, 0, 0.12);
+    padding: 0;
+    max-height: 120px;
+    min-width: 60px;
+}
+
+.clipo-image-info {
+    spacing: 2px;
+    margin-top: 2px;
+}
+
+.clipo-image-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.80);
+}
+
+.clipo-image-meta {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.40);
+}
+
+/* ── Timestamp ───────────────────────────────────── */
+.clipo-item-timestamp {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.00);
+    transition-duration: 150ms;
+    transition-property: color;
+    margin-top: 1px;
+}
+
+.clipo-item:hover .clipo-item-timestamp,
+.clipo-item:focus .clipo-item-timestamp {
+    color: rgba(255, 255, 255, 0.28);
+}
+
+/* ── Image Preview Hover Popup ───────────────────── */
+.clipo-image-preview-popup {
+    background-color: #2d2d2d;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+    box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.45),
+        0 2px 8px rgba(0, 0, 0, 0.25);
+    padding: 4px;
+}
+
+/* ── Pin Button ──────────────────────────────────── */
+.clipo-pin-button {
+    padding: 6px;
+    border-radius: 8px;
+    background-color: transparent;
+    opacity: 0.45;
+    transition-duration: 120ms;
+    transition-property: background-color, opacity;
+    min-width: 30px;
+    min-height: 30px;
+}
+
+.clipo-item:hover .clipo-pin-button,
+.clipo-item:focus .clipo-pin-button {
+    opacity: 1;
+}
+
+.clipo-pin-button StIcon {
+    color: rgba(255, 255, 255, 0.40);
+    icon-size: 16px;
+}
+
+.clipo-pin-button:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.clipo-pin-button:hover StIcon {
+    color: rgba(255, 214, 10, 0.90);
+}
+
+.clipo-pin-button.clipo-pinned {
+    background-color: rgba(255, 214, 10, 0.10);
+}
+
+.clipo-pin-button.clipo-pinned StIcon {
+    color: rgba(255, 214, 10, 0.90);
+}
+
+.clipo-pin-button.clipo-pinned:hover {
+    background-color: rgba(255, 214, 10, 0.16);
+}
+
+/* ── Delete Button ───────────────────────────────── */
+.clipo-delete-button {
+    padding: 6px;
+    border-radius: 8px;
+    background-color: transparent;
+    opacity: 0.6;
+    transition-duration: 150ms;
+    transition-property: opacity, background-color;
+    min-width: 30px;
+    min-height: 30px;
+}
+
+.clipo-item:hover .clipo-delete-button,
+.clipo-item:focus .clipo-delete-button {
+    opacity: 1;
+}
+
+.clipo-delete-button StIcon {
+    color: rgba(255, 255, 255, 0.30);
+    icon-size: 16px;
+}
+
+.clipo-delete-button:hover {
+    background-color: rgba(255, 59, 48, 0.14);
+}
+
+.clipo-delete-button:hover StIcon {
+    color: rgba(255, 80, 68, 0.95);
+}
+
+.clipo-delete-button:active {
+    background-color: rgba(255, 59, 48, 0.08);
+}
+
+/* ── Section Separator ───────────────────────────── */
+.clipo-separator {
+    height: 1px;
+    background-color: rgba(255, 255, 255, 0.05);
+    margin: 4px 6px;
+}
+
+/* ── Footer ──────────────────────────────────────── */
+.clipo-footer {
+    padding: 0;
+    margin: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background-color: transparent;
+}
+
+.clipo-footer-box {
+    padding: 8px 12px 8px 12px;
+    spacing: 6px;
+}
+
+.clipo-footer-btn {
+    padding: 6px;
+    border-radius: 7px;
+    background-color: transparent;
+    transition-duration: 120ms;
+    transition-property: background-color;
+    min-width: 28px;
+    min-height: 28px;
+}
+
+.clipo-footer-btn StIcon {
+    color: rgba(255, 255, 255, 0.40);
+    icon-size: 15px;
+}
+
+.clipo-footer-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.clipo-footer-btn:hover StIcon {
+    color: rgba(255, 255, 255, 0.80);
+}
+
+.clipo-footer-btn:active {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Private Mode ────────────────────────────────── */
+.clipo-private-active {
+    background-color: rgba(255, 59, 48, 0.12);
+}
+
+.clipo-private-active StIcon {
+    color: rgba(255, 80, 68, 0.90);
+}
+
+.clipo-private-active:hover {
+    background-color: rgba(255, 59, 48, 0.18);
+}
+
+/* ── Empty State ─────────────────────────────────── */
+.clipo-empty-state {
+    padding: 56px 24px;
+    spacing: 12px;
+}
+
+.clipo-empty-icon {
+    color: rgba(255, 255, 255, 0.12);
+}
+
+.clipo-empty-label {
+    font-size: 13px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.28);
+    text-align: center;
+}
+
+/* ── Confirm Dialog ──────────────────────────────── */
+.clipo-confirm-dialog {
+    width: 340px;
+    background-color: #2d2d2d;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.50),
+        0 4px 12px rgba(0, 0, 0, 0.30);
+}
+
+.clipo-confirm-dialog .modal-dialog-content-box {
+    padding: 24px;
+}
+
+.clipo-confirm-content {
+    spacing: 12px;
+}
+
+.clipo-confirm-icon {
+    color: rgba(255, 255, 255, 0.40);
+}
+
+.clipo-confirm-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.92);
+    text-align: center;
+}
+
+.clipo-confirm-message {
+    font-size: 13px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.50);
+    text-align: center;
+    line-height: 1.4;
+}
+
+/* ── Scrollbar ───────────────────────────────────── */
+.clipo-scroll-view StScrollBar {
+    width: 8px;
+    padding: 2px;
+}
+
+.clipo-scroll-view StScrollBar StButton#vhandle {
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 4px;
+    min-width: 3px;
+    min-height: 36px;
+    max-height: 36px;
+    margin: 2px;
+    transition-duration: 120ms;
+}
+
+.clipo-scroll-view StScrollBar StButton#vhandle:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+    min-width: 5px;
+}
+
+.clipo-scroll-view StScrollBar StButton#vhandle:active {
+    background-color: rgba(255, 255, 255, 0.32);
+}
+
+/* ── Override PopupMenu defaults ─────────────────── */
+.clipo-popup-menu .popup-menu-item {
+    padding: 0;
+    spacing: 0;
+    background-color: transparent;
+    border: none;
+}
+
+.clipo-popup-menu .popup-menu-item:hover,
+.clipo-popup-menu .popup-menu-item:focus,
+.clipo-popup-menu .popup-menu-item:active {
+    background-color: transparent;
+    border: none;
+}
+
+/* ── Search Highlight ────────────────────────────── */
+.clipo-search-highlight {
+    background-color: rgba(10, 132, 255, 0.28);
+    border-radius: 2px;
+}
+
+/* ── Keyboard Focus ──────────────────────────────── */
+.clipo-item:focus-visible {
+    outline: 2px solid rgba(10, 132, 255, 0.45);
+    outline-offset: -2px;
+}
+
+/* ── Count Badge ─────────────────────────────────── */
+.clipo-count-badge {
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.35);
+}
+
+/* ── Section Headers (Pinned / Recent) ───────────── */
+.clipo-section-header {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.35);
+    letter-spacing: 0.6px;
+    padding: 6px 6px 2px 6px;
+    margin-top: 2px;
+}
+
+/* ── Type Indicator Tags — subtle, inline ────────── */
+.clipo-type-pill {
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 6px;
+    padding: 3px 10px;
+    letter-spacing: 0.3px;
+    margin-bottom: 3px;
+    min-height: 40px;
+    x-align: start;
+    y-align: center;
+}
+
+.clipo-type-url {
+    background-color: rgba(10, 132, 255, 0.10);
+    color: rgba(130, 177, 255, 0.80);
+}
+
+.clipo-type-email {
+    background-color: rgba(52, 199, 89, 0.08);
+    color: rgba(120, 220, 150, 0.80);
+}
+
+.clipo-type-code {
+    background-color: rgba(175, 82, 222, 0.08);
+    color: rgba(190, 150, 230, 0.80);
+}
+
+.clipo-type-number {
+    background-color: rgba(255, 159, 10, 0.08);
+    color: rgba(240, 200, 120, 0.80);
+}
