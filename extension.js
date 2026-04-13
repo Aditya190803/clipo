@@ -29,6 +29,8 @@ const THUMBNAIL_SIZE = 48;
 const MAX_PREVIEW_LENGTH = 150;
 const IMAGE_PREVIEW_MARGIN = 24;
 const IMAGE_PREVIEW_FRAME = 12;
+const IMAGE_PREVIEW_MAX_WIDTH = 560;
+const IMAGE_PREVIEW_MAX_HEIGHT = 360;
 const OCR_IMAGE_HOLD_MS = 2200;
 const OCR_TEXT_MATCH_WINDOW_MS = 3000;
 const OCR_MIN_TEXT_LENGTH = 8;
@@ -121,6 +123,25 @@ function bytesEqual(left, right) {
     }
 
     return true;
+}
+
+function getImageSignature(data) {
+    const bytes = data instanceof GLib.Bytes ? data.toArray() : data;
+    if (!bytes || bytes.length < 4)
+        return 'unknown';
+
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47)
+        return 'png';
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF)
+        return 'jpeg';
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46)
+        return 'gif';
+    if (bytes[0] === 0x42 && bytes[1] === 0x4D)
+        return 'bmp';
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46)
+        return 'riff';
+
+    return 'unknown';
 }
 
 // Sensitive content patterns
@@ -350,10 +371,12 @@ class ClipboardItem extends St.BoxLayout {
                 console.error('[Clipo] Failed to create pixbuf from stream');
                 return null;
             }
-            console.log('[Clipo] Successfully loaded image:', pixbuf.get_width(), 'x', pixbuf.get_height());
             return pixbuf;
         } catch (e) {
-            console.error('[Clipo] Failed to load image:', e.message);
+            console.error(
+                `[Clipo] Failed to decode image (size=${gbytes.get_size()} signature=${getImageSignature(gbytes)}):`,
+                e.message
+            );
             return null;
         } finally {
             try { stream.close(null); } catch (e) {}
@@ -361,13 +384,17 @@ class ClipboardItem extends St.BoxLayout {
     }
 
     _createPixbufActor(pixbuf, styleClass, width, height) {
-        const hasAlpha = pixbuf.get_has_alpha();
-        const pixelFormat = hasAlpha
-            ? Cogl.PixelFormat.RGBA_8888
-            : Cogl.PixelFormat.RGB_888;
-        const pixWidth = pixbuf.get_width();
-        const pixHeight = pixbuf.get_height();
-        const rowstride = pixbuf.get_rowstride();
+        const renderPixbuf = pixbuf.get_has_alpha()
+            ? pixbuf
+            : pixbuf.add_alpha(false, 0, 0, 0);
+
+        if (!renderPixbuf)
+            return null;
+
+        const pixelFormat = Cogl.PixelFormat.RGBA_8888;
+        const pixWidth = renderPixbuf.get_width();
+        const pixHeight = renderPixbuf.get_height();
+        const rowstride = renderPixbuf.get_rowstride();
 
         let content;
 
@@ -375,27 +402,59 @@ class ClipboardItem extends St.BoxLayout {
             // GNOME 46+ path: St.ImageContent
             if (St.ImageContent && typeof St.ImageContent.new_with_preferred_size === 'function') {
                 content = St.ImageContent.new_with_preferred_size(pixWidth, pixHeight);
-                const pixelBytes = pixbuf.read_pixel_bytes();
-                const setBytesArgs = [];
+                const pixelBytes = renderPixbuf.read_pixel_bytes();
                 const mutterBackend = global.stage?.context?.get_backend?.();
+                const pixelFormats = [
+                    Cogl.PixelFormat.RGBA_8888,
+                    Cogl.PixelFormat.RGBA_8888_PRE,
+                ].filter(format => format !== undefined);
 
-                // GNOME Shell 48+ expects the active Cogl context as the first argument.
-                if (content.set_bytes.length === 6 && mutterBackend?.get_cogl_context)
-                    setBytesArgs.push(mutterBackend.get_cogl_context());
+                let bytesSet = false;
+                let lastError = null;
 
-                content.set_bytes(
-                    ...setBytesArgs,
-                    pixelBytes,
-                    pixelFormat,
-                    pixWidth,
-                    pixHeight,
-                    rowstride
-                );
+                for (const format of pixelFormats) {
+                    if (bytesSet)
+                        break;
+
+                    try {
+                        content.set_bytes(
+                            pixelBytes,
+                            format,
+                            pixWidth,
+                            pixHeight,
+                            rowstride
+                        );
+                        bytesSet = true;
+                    } catch (setBytesError) {
+                        try {
+                            if (!mutterBackend?.get_cogl_context)
+                                throw setBytesError;
+
+                            content.set_bytes(
+                                mutterBackend.get_cogl_context(),
+                                pixelBytes,
+                                format,
+                                pixWidth,
+                                pixHeight,
+                                rowstride
+                            );
+                            bytesSet = true;
+                        } catch (withContextError) {
+                            lastError = withContextError;
+                        }
+                    }
+                }
+
+                if (!bytesSet) {
+                    if (lastError)
+                        throw lastError;
+                    throw new Error('Failed to set bytes on St.ImageContent');
+                }
             } else if (Clutter.Image) {
                 // Older GNOME path: Clutter.Image
                 content = new Clutter.Image();
                 // set_data expects a raw Uint8Array/Buffer, not GLib.Bytes
-                const rawPixels = pixbuf.read_pixel_bytes().get_data();
+                const rawPixels = renderPixbuf.read_pixel_bytes().get_data();
                 if (typeof content.set_data === 'function') {
                     content.set_data(rawPixels, pixelFormat, pixWidth, pixHeight, rowstride);
                 } else {
@@ -504,8 +563,10 @@ class ClipboardItem extends St.BoxLayout {
             const origHeight = pixbuf.get_height();
             
             const monitor = Main.layoutManager.currentMonitor;
-            const maxWidth = monitor ? Math.max(160, monitor.width - IMAGE_PREVIEW_MARGIN * 2) : origWidth;
-            const maxHeight = monitor ? Math.max(160, monitor.height - IMAGE_PREVIEW_MARGIN * 2) : origHeight;
+            const monitorBoundWidth = monitor ? Math.max(160, monitor.width - IMAGE_PREVIEW_MARGIN * 2) : IMAGE_PREVIEW_MAX_WIDTH;
+            const monitorBoundHeight = monitor ? Math.max(160, monitor.height - IMAGE_PREVIEW_MARGIN * 2) : IMAGE_PREVIEW_MAX_HEIGHT;
+            const maxWidth = Math.min(IMAGE_PREVIEW_MAX_WIDTH, monitorBoundWidth);
+            const maxHeight = Math.min(IMAGE_PREVIEW_MAX_HEIGHT, monitorBoundHeight);
             let previewWidth = origWidth;
             let previewHeight = origHeight;
             
@@ -844,39 +905,37 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
     
     _repositionAtCursor() {
-        const monitor = Main.layoutManager.currentMonitor;
-        if (!monitor) return;
-
         // Use saved cursor position (captured at toggle time)
         const pointerX = this._savedCursorX;
         const pointerY = this._savedCursorY;
+
+        const monitor = this._getMonitorForPoint(pointerX, pointerY);
+        if (!monitor) return;
 
         const boxPointer = this.menu._boxPointer;
         const menuActor = boxPointer?.actor || boxPointer || this.menu.actor;
         
         if (!menuActor) return;
 
-        // Get menu dimensions
-        const menuWidth = this._settings.get_int('window-width') || 400;
-        const menuHeight = this._settings.get_int('window-height') || 500;
+        const configuredWidth = this._settings.get_int('window-width') || 400;
+        const configuredHeight = this._settings.get_int('window-height') || 500;
+        const [measuredWidth, measuredHeight] = typeof menuActor.get_transformed_size === 'function'
+            ? menuActor.get_transformed_size()
+            : [0, 0];
+        const menuWidth = Math.max(1, Math.round(measuredWidth || menuActor.width || configuredWidth));
+        const menuHeight = Math.max(1, Math.round(measuredHeight || menuActor.height || configuredHeight));
 
         // Calculate position - place menu near cursor
         let x = Math.floor(pointerX);
         let y = Math.floor(pointerY);
 
-        // Adjust if menu would overflow right edge
-        if (x + menuWidth > monitor.x + monitor.width) {
-            x = monitor.x + monitor.width - menuWidth - POPUP_EDGE_MARGIN;
-        }
+        const minX = monitor.x + POPUP_EDGE_MARGIN;
+        const minY = monitor.y + POPUP_EDGE_MARGIN;
+        const maxX = monitor.x + monitor.width - menuWidth - POPUP_EDGE_MARGIN;
+        const maxY = monitor.y + monitor.height - menuHeight - POPUP_EDGE_MARGIN;
 
-        // Adjust if menu would overflow bottom edge
-        if (y + menuHeight > monitor.y + monitor.height) {
-            y = monitor.y + monitor.height - menuHeight - POPUP_EDGE_MARGIN;
-        }
-
-        // Ensure menu stays within monitor bounds
-        x = Math.max(monitor.x + POPUP_EDGE_MARGIN, x);
-        y = Math.max(monitor.y + POPUP_EDGE_MARGIN, y);
+        x = Math.max(minX, Math.min(x, Math.max(minX, maxX)));
+        y = Math.max(minY, Math.min(y, Math.max(minY, maxY)));
 
         // Set position directly on the actor
         menuActor.set_position(x, y);
@@ -888,6 +947,18 @@ class ClipboardIndicator extends PanelMenu.Button {
         if (boxPointer && boxPointer._arrow) {
             boxPointer._arrow.hide();
         }
+    }
+
+    _getMonitorForPoint(x, y) {
+        const monitors = Main.layoutManager.monitors || [];
+
+        for (const monitor of monitors) {
+            if (x >= monitor.x && x < monitor.x + monitor.width &&
+                y >= monitor.y && y < monitor.y + monitor.height)
+                return monitor;
+        }
+
+        return Main.layoutManager.currentMonitor || monitors[0] || null;
     }
     
     _buildMenu() {
@@ -1254,7 +1325,7 @@ class ClipboardIndicator extends PanelMenu.Button {
             mimeType,
             (clipboard, bytes) => {
                 if (bytes && bytes.get_size() > 0) {
-                    const imageData = bytes.get_data();
+                    const imageData = toGBytes(bytes);
                     if (this._settings.get_boolean('has-text-extractor-extension') &&
                         this._hasRecentTextExtractorScreenshotSignal()) {
                         this._schedulePendingImageCapture(imageData);
@@ -1377,7 +1448,10 @@ class ClipboardIndicator extends PanelMenu.Button {
         const imageSize = getByteLength(imageData);
 
         if (!imageData || imageSize === 0) return;
-        if (imageSize > maxSize) return;
+        if (imageSize > maxSize) {
+            console.warn(`[Clipo] Skipping image over limit (${Math.round(imageSize / (1024 * 1024))}MB > ${this._settings.get_int('max-image-size')}MB)`);
+            return;
+        }
         
         // Check for duplicate images
         if (this._settings.get_boolean('deduplicate')) {
@@ -1402,7 +1476,7 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
 
     _schedulePendingImageCapture(imageData) {
-        if (!imageData || imageData.length === 0) {
+        if (!imageData || getByteLength(imageData) === 0) {
             return;
         }
 
@@ -1607,11 +1681,17 @@ class ClipboardIndicator extends PanelMenu.Button {
             );
         }
         
-        if (this._settings.get_boolean('move-item-first') && !entry.pinned) {
-            this._history.moveToFront(entry);
+        const shouldMoveToFront = this._settings.get_boolean('move-item-first');
+        if (shouldMoveToFront) {
+            this._moveEntryToFront(entry);
+            this._store.syncFromLists(this._history.toArray(), this._pinned.toArray());
         }
         
         this._updateSelection(entry);
+
+        if (shouldMoveToFront) {
+            this._refreshMenu();
+        }
         
         if (this._settings.get_boolean('close-on-select')) {
             this.menu.close();
@@ -1753,6 +1833,8 @@ class ClipboardIndicator extends PanelMenu.Button {
     }
     
     _onMenuOpened() {
+        this._resetScrollToTop();
+
         if (this._focusTimeout) {
             GLib.source_remove(this._focusTimeout);
         }
@@ -1769,6 +1851,29 @@ class ClipboardIndicator extends PanelMenu.Button {
                 }
             }
             this._focusTimeout = null;
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _resetScrollToTop() {
+        if (!this._scrollView)
+            return;
+
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (!this._scrollView)
+                return GLib.SOURCE_REMOVE;
+
+            const vAdjustment = this._scrollView.vscroll?.adjustment
+                || this._scrollView.get_vscroll_bar?.()?.get_adjustment?.()
+                || this._scrollView.vadjustment;
+
+            if (vAdjustment && typeof vAdjustment.set_value === 'function') {
+                const lower = typeof vAdjustment.get_lower === 'function'
+                    ? vAdjustment.get_lower()
+                    : 0;
+                vAdjustment.set_value(lower);
+            }
+
             return GLib.SOURCE_REMOVE;
         });
     }
