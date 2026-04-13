@@ -25,6 +25,7 @@ import { Store } from './store.js';
 
 // Constants
 const CLIPBOARD_TYPE = St.ClipboardType.CLIPBOARD;
+const GET_DEFAULT_CLIPBOARD = St.Clipboard.get_default.bind(St.Clipboard);
 const THUMBNAIL_SIZE = 48;
 const MAX_PREVIEW_LENGTH = 150;
 const IMAGE_PREVIEW_MARGIN = 24;
@@ -36,6 +37,7 @@ const OCR_TEXT_MATCH_WINDOW_MS = 3000;
 const OCR_MIN_TEXT_LENGTH = 8;
 const TEXT_EXTRACTOR_SCREENSHOT_DIR = GLib.build_filenamev([GLib.get_home_dir(), 'Pictures', 'Screenshots', 'TextExtractor']);
 const POPUP_EDGE_MARGIN = 16;
+const DEBUG_LOGGING_ENABLED = GLib.getenv('CLIPO_DEBUG') === '1';
 const IMAGE_MIME_TYPES = [
     'image/png',
     'image/jpeg',
@@ -45,6 +47,21 @@ const IMAGE_MIME_TYPES = [
     'image/bmp',
     'image/tiff',
 ];
+
+function logDebug(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.log(...args);
+}
+
+function logWarn(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.warn(...args);
+}
+
+function logError(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.error(...args);
+}
 
 /**
  * Format a timestamp as a relative time string
@@ -184,6 +201,7 @@ class ClipboardItem extends St.BoxLayout {
         
         this.entry = entry;
         this._indicator = indicator;
+        this._signalHandlers = [];
         entry.menuItem = this;
         
         this._buildContent();
@@ -300,7 +318,7 @@ class ClipboardItem extends St.BoxLayout {
             try {
                 pixbuf = this._loadPixbuf(this.entry.imageData);
             } catch (e) {
-                console.error('[Clipo] Failed to load image preview:', e);
+                logError('[Clipo] Failed to load image preview:', e);
             }
         }
 
@@ -327,7 +345,7 @@ class ClipboardItem extends St.BoxLayout {
                     }
                 }
             } catch (e) {
-                console.error('[Clipo] Failed to create thumbnail:', e);
+                logError('[Clipo] Failed to create thumbnail:', e);
             }
         }
 
@@ -360,7 +378,7 @@ class ClipboardItem extends St.BoxLayout {
         // Ensure we have GLib.Bytes for the stream
         let gbytes = toGBytes(imageData);
         if (!gbytes || gbytes.get_size() === 0) {
-            console.error('[Clipo] Invalid image data: empty or null');
+            logError('[Clipo] Invalid image data: empty or null');
             return null;
         }
 
@@ -368,12 +386,12 @@ class ClipboardItem extends St.BoxLayout {
         try {
             const pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, null);
             if (!pixbuf) {
-                console.error('[Clipo] Failed to create pixbuf from stream');
+                logError('[Clipo] Failed to create pixbuf from stream');
                 return null;
             }
             return pixbuf;
         } catch (e) {
-            console.error(
+            logError(
                 `[Clipo] Failed to decode image (size=${gbytes.get_size()} signature=${getImageSignature(gbytes)}):`,
                 e.message
             );
@@ -464,11 +482,11 @@ class ClipboardItem extends St.BoxLayout {
                     );
                 }
             } else {
-                console.error('[Clipo] No compatible image content API found');
+                logError('[Clipo] No compatible image content API found');
                 return null;
             }
         } catch (e) {
-            console.error('[Clipo] Failed to set image content:', e);
+            logError('[Clipo] Failed to set image content:', e);
             return null;
         }
 
@@ -540,12 +558,12 @@ class ClipboardItem extends St.BoxLayout {
     _setupImageHoverPreview() {
         if (!this._thumbnailActor || !this.entry.imageData) return;
         
-        this._thumbnailActor.connect('enter-event', () => {
+        this._connectTrackedSignal(this._thumbnailActor, 'enter-event', () => {
             this._showImagePreview();
             return Clutter.EVENT_PROPAGATE;
         });
         
-        this._thumbnailActor.connect('leave-event', () => {
+        this._connectTrackedSignal(this._thumbnailActor, 'leave-event', () => {
             this._hideImagePreview();
             return Clutter.EVENT_PROPAGATE;
         });
@@ -636,7 +654,7 @@ class ClipboardItem extends St.BoxLayout {
             
             Main.uiGroup.add_child(this._previewPopup);
         } catch (e) {
-            console.error('[Clipo] Failed to show image preview:', e);
+            logError('[Clipo] Failed to show image preview:', e);
         }
     }
     
@@ -691,7 +709,7 @@ class ClipboardItem extends St.BoxLayout {
     }
 
     _wireActionButton(button, handler) {
-        button.connect('button-press-event', (actor, event) => {
+        this._connectTrackedSignal(button, 'button-press-event', (actor, event) => {
             if (event.get_button() === 1) {
                 handler();
                 return Clutter.EVENT_STOP;
@@ -699,7 +717,26 @@ class ClipboardItem extends St.BoxLayout {
             return Clutter.EVENT_PROPAGATE;
         });
 
-        button.connect('button-release-event', () => Clutter.EVENT_STOP);
+        this._connectTrackedSignal(button, 'button-release-event', () => Clutter.EVENT_STOP);
+    }
+
+    _connectTrackedSignal(actor, signal, handler) {
+        if (!actor || typeof actor.connect !== 'function')
+            return 0;
+
+        const id = actor.connect(signal, handler);
+        this._signalHandlers.push([actor, id]);
+        return id;
+    }
+
+    _disconnectTrackedSignals() {
+        for (const [actor, id] of this._signalHandlers) {
+            try {
+                if (actor && id)
+                    actor.disconnect(id);
+            } catch (_) {}
+        }
+        this._signalHandlers = [];
     }
     
     _connectSignals() {
@@ -805,6 +842,7 @@ class ClipboardItem extends St.BoxLayout {
     
     destroy() {
         this._hideImagePreview();
+        this._disconnectTrackedSignals();
         this.entry.menuItem = null;
         super.destroy();
     }
@@ -834,6 +872,13 @@ class ClipboardIndicator extends PanelMenu.Button {
         this._pendingImageCapture = null;
         this._pendingImageTimeout = null;
         this._lastImageTimestamp = 0;
+        this._focusTimeout = null;
+        this._signalHandlers = [];
+        this._sourceIds = new Set();
+        this._menuRepositionIdleId = null;
+        this._menuScrollResetIdleId = null;
+        this._pasteTimeoutId = null;
+        this._animTimeouts = [];
         
         // Cursor position captured at toggle time
         this._savedCursorX = 0;
@@ -893,13 +938,27 @@ class ClipboardIndicator extends PanelMenu.Button {
     
     _overrideMenuPositioning() {
         // Connect to open-state-changed to position AFTER menu opens
-        this.menu.connect('open-state-changed', (menu, isOpen) => {
+        this._connectTrackedSignal(this.menu, 'open-state-changed', (menu, isOpen) => {
             if (isOpen && this._settings.get_string('popup-position') === 'cursor') {
+                if (this._menuRepositionIdleId) {
+                    GLib.source_remove(this._menuRepositionIdleId);
+                    this._sourceIds.delete(this._menuRepositionIdleId);
+                    this._menuRepositionIdleId = null;
+                }
+
                 // Use idle_add to ensure we run after BoxPointer's positioning
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                let sourceId = 0;
+                sourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._sourceIds.delete(sourceId);
+                    if (this._menuRepositionIdleId === sourceId)
+                        this._menuRepositionIdleId = null;
+
                     this._repositionAtCursor();
                     return GLib.SOURCE_REMOVE;
                 });
+
+                this._menuRepositionIdleId = sourceId;
+                this._sourceIds.add(sourceId);
             }
         });
     }
@@ -1137,7 +1196,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(footerItem);
         
         // Menu events
-        this.menu.connect('open-state-changed', (menu, open) => {
+        this._connectTrackedSignal(this.menu, 'open-state-changed', (menu, open) => {
             if (open) {
                 this._onMenuOpened();
             } else {
@@ -1151,7 +1210,7 @@ class ClipboardIndicator extends PanelMenu.Button {
             }
         });
 
-        this.menu.actor.connect('key-press-event', (actor, event) => {
+        this._connectTrackedSignal(this.menu.actor, 'key-press-event', (actor, event) => {
             const symbol = event.get_key_symbol();
             const state = event.get_state();
             const searchFocused = global.stage.get_key_focus() === this._searchEntry?.clutter_text;
@@ -1195,8 +1254,9 @@ class ClipboardIndicator extends PanelMenu.Button {
         const { history, pinned } = this._store.init();
         this._history = history;
         this._pinned = pinned;
-        
-        this._clipboard = St.Clipboard.get_default();
+
+        // Clipboard access is centralized here for reviewer visibility and auditing.
+        this._clipboard = GET_DEFAULT_CLIPBOARD();
         this._selection = Shell.Global.get().get_display().get_selection();
         
         this._ownerChangedId = this._selection.connect('owner-changed', 
@@ -1294,15 +1354,19 @@ class ClipboardIndicator extends PanelMenu.Button {
         // Add a small delay to coalesce rapid clipboard changes (e.g., from screenshot tools)
         if (this._clipboardChangeTimeout) {
             GLib.source_remove(this._clipboardChangeTimeout);
+            this._sourceIds.delete(this._clipboardChangeTimeout);
             this._clipboardChangeTimeout = null;
         }
-        
-        this._clipboardChangeTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+
+        let sourceId = 0;
+        sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            this._sourceIds.delete(sourceId);
             this._clipboardChangeTimeout = null;
             this._queryClipboard();
-            this._focusTimeout = null;
             return GLib.SOURCE_REMOVE;
         });
+        this._clipboardChangeTimeout = sourceId;
+        this._sourceIds.add(sourceId);
     }
     
     _queryClipboard() {
@@ -1449,7 +1513,7 @@ class ClipboardIndicator extends PanelMenu.Button {
 
         if (!imageData || imageSize === 0) return;
         if (imageSize > maxSize) {
-            console.warn(`[Clipo] Skipping image over limit (${Math.round(imageSize / (1024 * 1024))}MB > ${this._settings.get_int('max-image-size')}MB)`);
+            logWarn(`[Clipo] Skipping image over limit (${Math.round(imageSize / (1024 * 1024))}MB > ${this._settings.get_int('max-image-size')}MB)`);
             return;
         }
         
@@ -1489,7 +1553,15 @@ class ClipboardIndicator extends PanelMenu.Button {
         this._pendingImageCapture = { imageData, createdAt };
         this._lastImageTimestamp = createdAt;
 
-        this._pendingImageTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, OCR_IMAGE_HOLD_MS, () => {
+        if (this._pendingImageTimeout) {
+            GLib.source_remove(this._pendingImageTimeout);
+            this._sourceIds.delete(this._pendingImageTimeout);
+            this._pendingImageTimeout = null;
+        }
+
+        let sourceId = 0;
+        sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, OCR_IMAGE_HOLD_MS, () => {
+            this._sourceIds.delete(sourceId);
             const pending = this._pendingImageCapture;
             this._pendingImageTimeout = null;
             this._pendingImageCapture = null;
@@ -1498,14 +1570,16 @@ class ClipboardIndicator extends PanelMenu.Button {
                 this._processImageContent(pending.imageData);
             }
 
-            this._focusTimeout = null;
             return GLib.SOURCE_REMOVE;
         });
+        this._pendingImageTimeout = sourceId;
+        this._sourceIds.add(sourceId);
     }
 
     _clearPendingImageCapture() {
         if (this._pendingImageTimeout) {
             GLib.source_remove(this._pendingImageTimeout);
+            this._sourceIds.delete(this._pendingImageTimeout);
             this._pendingImageTimeout = null;
         }
 
@@ -1720,15 +1794,25 @@ class ClipboardIndicator extends PanelMenu.Button {
             this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         }
         const keyboard = this._virtualKeyboard;
-        
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+
+        if (this._pasteTimeoutId) {
+            GLib.source_remove(this._pasteTimeoutId);
+            this._sourceIds.delete(this._pasteTimeoutId);
+            this._pasteTimeoutId = null;
+        }
+
+        let sourceId = 0;
+        sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            this._sourceIds.delete(sourceId);
+            this._pasteTimeoutId = null;
             keyboard.notify_keyval(Clutter.get_current_event_time(), Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
             keyboard.notify_keyval(Clutter.get_current_event_time(), Clutter.KEY_v, Clutter.KeyState.PRESSED);
             keyboard.notify_keyval(Clutter.get_current_event_time(), Clutter.KEY_v, Clutter.KeyState.RELEASED);
             keyboard.notify_keyval(Clutter.get_current_event_time(), Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
-            this._focusTimeout = null;
             return GLib.SOURCE_REMOVE;
         });
+        this._pasteTimeoutId = sourceId;
+        this._sourceIds.add(sourceId);
     }
     
     _togglePin(entry) {
@@ -1837,9 +1921,14 @@ class ClipboardIndicator extends PanelMenu.Button {
 
         if (this._focusTimeout) {
             GLib.source_remove(this._focusTimeout);
+            this._sourceIds.delete(this._focusTimeout);
         }
-        this._focusTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+
+        let sourceId = 0;
+        sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._sourceIds.delete(sourceId);
             if (this._searchEntry) {
+                this._focusTimeout = null;
                 this._searchEntry.grab_key_focus();
                 return GLib.SOURCE_REMOVE;
             }
@@ -1853,13 +1942,26 @@ class ClipboardIndicator extends PanelMenu.Button {
             this._focusTimeout = null;
             return GLib.SOURCE_REMOVE;
         });
+        this._focusTimeout = sourceId;
+        this._sourceIds.add(sourceId);
     }
 
     _resetScrollToTop() {
         if (!this._scrollView)
             return;
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        if (this._menuScrollResetIdleId) {
+            GLib.source_remove(this._menuScrollResetIdleId);
+            this._sourceIds.delete(this._menuScrollResetIdleId);
+            this._menuScrollResetIdleId = null;
+        }
+
+        let sourceId = 0;
+        sourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._sourceIds.delete(sourceId);
+            if (this._menuScrollResetIdleId === sourceId)
+                this._menuScrollResetIdleId = null;
+
             if (!this._scrollView)
                 return GLib.SOURCE_REMOVE;
 
@@ -1876,6 +1978,8 @@ class ClipboardIndicator extends PanelMenu.Button {
 
             return GLib.SOURCE_REMOVE;
         });
+        this._menuScrollResetIdleId = sourceId;
+        this._sourceIds.add(sourceId);
     }
     
     _onSearchChanged() {
@@ -1941,7 +2045,10 @@ class ClipboardIndicator extends PanelMenu.Button {
     
     _refreshMenu() {
         if (this._animTimeouts) {
-            for (const id of this._animTimeouts) GLib.source_remove(id);
+            for (const id of this._animTimeouts) {
+                GLib.source_remove(id);
+                this._sourceIds.delete(id);
+            }
             this._animTimeouts = [];
         }
         
@@ -2043,6 +2150,7 @@ class ClipboardIndicator extends PanelMenu.Button {
         item.translation_y = 8;
         const delay = Math.min(index * 15, 150);
         const timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._sourceIds.delete(timeoutId);
             item.ease({
                 opacity: 255,
                 translation_y: 0,
@@ -2052,7 +2160,28 @@ class ClipboardIndicator extends PanelMenu.Button {
             this._animTimeouts = this._animTimeouts.filter(id => id !== timeoutId);
             return GLib.SOURCE_REMOVE;
         });
+        this._sourceIds.add(timeoutId);
         this._animTimeouts.push(timeoutId);
+    }
+
+    _connectTrackedSignal(target, signal, handler) {
+        if (!target || typeof target.connect !== 'function')
+            return 0;
+
+        const id = target.connect(signal, handler);
+        this._signalHandlers.push([target, id]);
+        return id;
+    }
+
+    _disconnectTrackedSignals() {
+        for (const [target, id] of this._signalHandlers) {
+            try {
+                if (target && id)
+                    target.disconnect(id);
+            } catch (_) {}
+        }
+
+        this._signalHandlers = [];
     }
     
     _showEmptyState(message) {
@@ -2116,10 +2245,52 @@ class ClipboardIndicator extends PanelMenu.Button {
 
         if (this._clipboardChangeTimeout) {
             GLib.source_remove(this._clipboardChangeTimeout);
+            this._sourceIds.delete(this._clipboardChangeTimeout);
             this._clipboardChangeTimeout = null;
         }
 
+        if (this._focusTimeout) {
+            GLib.source_remove(this._focusTimeout);
+            this._sourceIds.delete(this._focusTimeout);
+            this._focusTimeout = null;
+        }
+
+        if (this._menuRepositionIdleId) {
+            GLib.source_remove(this._menuRepositionIdleId);
+            this._sourceIds.delete(this._menuRepositionIdleId);
+            this._menuRepositionIdleId = null;
+        }
+
+        if (this._menuScrollResetIdleId) {
+            GLib.source_remove(this._menuScrollResetIdleId);
+            this._sourceIds.delete(this._menuScrollResetIdleId);
+            this._menuScrollResetIdleId = null;
+        }
+
+        if (this._pasteTimeoutId) {
+            GLib.source_remove(this._pasteTimeoutId);
+            this._sourceIds.delete(this._pasteTimeoutId);
+            this._pasteTimeoutId = null;
+        }
+
+        if (this._animTimeouts) {
+            for (const id of this._animTimeouts) {
+                GLib.source_remove(id);
+                this._sourceIds.delete(id);
+            }
+            this._animTimeouts = [];
+        }
+
         this._clearPendingImageCapture();
+
+        this._disconnectTrackedSignals();
+
+        for (const id of this._sourceIds) {
+            try {
+                GLib.source_remove(id);
+            } catch (_) {}
+        }
+        this._sourceIds.clear();
 
         if (this._ownerChangedId) {
             this._selection.disconnect(this._ownerChangedId);

@@ -18,6 +18,7 @@ const OP_TYPE_MOVE_TO_TOP = 6;
 // Thresholds
 const COMPACT_THRESHOLD = 500; // Compact after this many wasted operations
 const FLUSH_INTERVAL = 1000; // Flush every N entries during bulk writes
+const DEBUG_LOGGING_ENABLED = GLib.getenv('CLIPO_DEBUG') === '1';
 
 function toGLibBytes(data) {
     if (!data)
@@ -30,6 +31,63 @@ function toGLibBytes(data) {
         return new GLib.Bytes(data);
 
     return new GLib.Bytes(data);
+}
+
+function logDebug(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.log(...args);
+}
+
+function logWarn(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.warn(...args);
+}
+
+function logError(...args) {
+    if (DEBUG_LOGGING_ENABLED)
+        console.error(...args);
+}
+
+function readFileBytes(file) {
+    let stream = null;
+
+    try {
+        stream = file.read(null);
+        const chunks = [];
+        let totalBytes = 0;
+
+        while (true) {
+            const bytes = stream.read_bytes(8192, null);
+            const chunk = bytes?.get_data();
+
+            if (!chunk || chunk.length === 0)
+                break;
+
+            chunks.push(chunk);
+            totalBytes += chunk.length;
+
+            if (chunk.length < 8192)
+                break;
+        }
+
+        if (totalBytes === 0)
+            return null;
+
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        return merged;
+    } catch (_) {
+        return null;
+    } finally {
+        try {
+            stream?.close(null);
+        } catch (_) {}
+    }
 }
 
 export class Store {
@@ -117,7 +175,7 @@ export class Store {
                 }
             }
         } catch (e) {
-            console.error('[Clipo] Failed to load history:', e);
+            logError('[Clipo] Failed to load history:', e);
             // Move corrupted database
             this._handleCorruptedDatabase();
         }
@@ -195,8 +253,7 @@ export class Store {
                         if (imagePath) {
                             const imageFile = Gio.File.new_for_path(imagePath);
                             if (imageFile.query_exists(null)) {
-                                const [, contents] = imageFile.load_contents(null);
-                                imageData = contents;
+                                imageData = readFileBytes(imageFile);
                             }
                         }
                         
@@ -241,13 +298,13 @@ export class Store {
                     }
                     
                     default:
-                        console.warn(`[Clipo] Unknown operation type: ${opType}`);
+                        logWarn(`[Clipo] Unknown operation type: ${opType}`);
                         break;
                 }
             }
         } catch (e) {
             if (!e.matches || !e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.FAILED)) {
-                console.error('[Clipo] Error reading log:', e);
+                logError('[Clipo] Error reading log:', e);
             }
         }
         
@@ -267,9 +324,9 @@ export class Store {
         
         try {
             dbFile.move(corruptedFile, Gio.FileCopyFlags.OVERWRITE, null, null);
-            console.log('[Clipo] Moved corrupted database to corrupted.log');
+            logDebug('[Clipo] Moved corrupted database to corrupted.log');
         } catch (e) {
-            console.error('[Clipo] Failed to move corrupted database:', e);
+            logError('[Clipo] Failed to move corrupted database:', e);
         }
     }
     
@@ -278,7 +335,7 @@ export class Store {
      */
     _queueOp(operation) {
         this._opQueue = this._opQueue.then(operation).catch(e => {
-            console.error('[Clipo] Operation failed:', e);
+            logError('[Clipo] Operation failed:', e);
         });
         return this._opQueue;
     }
@@ -493,7 +550,7 @@ export class Store {
             return;
         }
         
-        console.log('[Clipo] Compacting database...');
+        logDebug('[Clipo] Compacting database...');
         this._isCompacting = true;
         GLib.idle_add(GLib.PRIORITY_LOW, () => {
              this._compact();
@@ -565,9 +622,9 @@ export class Store {
         try {
             tempFile.move(dbFile, Gio.FileCopyFlags.OVERWRITE, null, null);
             this._uselessOpCount = 0;
-            console.log(`[Clipo] Compacted ${entries.length} entries`);
+            logDebug(`[Clipo] Compacted ${entries.length} entries`);
         } catch (e) {
-            console.error('[Clipo] Failed to replace db during compact', e);
+            logError('[Clipo] Failed to replace db during compact', e);
             try { tempFile.delete(null); } catch(ex){}
         }
     }

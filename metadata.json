@@ -1,6 +1,6 @@
 {
   "name": "Clipo",
-  "description": "Lightweight, fast, keyboard-driven clipboard manager with rich text & image support",
+  "description": "Lightweight, fast, keyboard-driven clipboard manager with rich text and image support. This extension accesses clipboard data locally to maintain clipboard history.",
   "uuid": "clipo@Aditya190803",
   "shell-version": [ "48", "49", "50"],
   "url": "https://github.com/Aditya190803/clipo",
