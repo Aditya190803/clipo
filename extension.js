@@ -296,6 +296,7 @@ const ClipboardItem = GObject.registerClass(
                 vertical: true,
                 x_expand: true,
                 y_align: Clutter.ActorAlign.CENTER,
+                clip_to_allocation: true,
             });
             mainBox.add_child(this._contentBox);
 
@@ -357,7 +358,7 @@ const ClipboardItem = GObject.registerClass(
             const labelText = this._label.clutter_text;
             labelText.ellipsize = 3; // PANGO_ELLIPSIZE_END
             labelText.line_wrap = true;
-            labelText.line_wrap_mode = 0; // PANGO_WRAP_WORD
+            labelText.line_wrap_mode = 2; // PANGO_WRAP_WORD_CHAR
             if (typeof labelText.set_single_line_mode === 'function') {
                 labelText.set_single_line_mode(false);
             } else if ('single_line_mode' in labelText) {
@@ -809,7 +810,7 @@ const ClipboardItem = GObject.registerClass(
             if (preview.length > MAX_PREVIEW_LENGTH) {
                 preview = preview.substring(0, MAX_PREVIEW_LENGTH) + '…';
             }
-            return preview;
+            return preview || _('Empty text');
         }
 
         _wireActionButton(button, handler) {
@@ -1706,10 +1707,18 @@ const ClipboardIndicator = GObject.registerClass(
             if (!this._isAlive())
                 return;
 
-            const maxSize = this._settings.get_int('max-image-size') * 1024 * 1024;
-            const imageSize = getByteLength(imageData);
+            if (!imageData) return;
 
-            if (!imageData || imageSize === 0) return;
+            // Normalize to GLib.Bytes so size is always computed correctly.
+            // Raw Uint8Arrays from clipboard callbacks can report buffer
+            // capacity via .length instead of the actual data size.
+            const normalizedData = toGBytes(imageData);
+            if (!normalizedData) return;
+
+            const maxSize = this._settings.get_int('max-image-size') * 1024 * 1024;
+            const imageSize = normalizedData.get_size();
+
+            if (imageSize === 0) return;
             if (imageSize > maxSize) {
                 logWarn(`[Clipo] Skipping image over limit (${Math.round(imageSize / (1024 * 1024))}MB > ${this._settings.get_int('max-image-size')}MB)`);
                 return;
@@ -1717,7 +1726,7 @@ const ClipboardIndicator = GObject.registerClass(
 
             // Check for duplicate images
             if (this._settings.get_boolean('deduplicate')) {
-                const existing = this._findExistingImageEntry(imageData);
+                const existing = this._findExistingImageEntry(normalizedData);
 
                 if (existing) {
                     if (this._settings.get_boolean('move-item-first')) {
@@ -1731,7 +1740,7 @@ const ClipboardIndicator = GObject.registerClass(
             const entry = new ClipboardEntry(
                 this._store.getNextId(),
                 'image',
-                imageData
+                normalizedData
             );
 
             this._addEntry(entry);
@@ -2605,28 +2614,8 @@ const ClipboardIndicator = GObject.registerClass(
             if (!this._isAlive())
                 return;
 
-            if (!this._animTimeouts) this._animTimeouts = [];
-            item.opacity = 0;
-            item.translation_y = 8;
-            const delay = Math.min(index * 15, 150);
-            const timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-                this._sourceIds.delete(timeoutId);
-                if (!this._isAlive() || isActorDestroyed(item)) {
-                    this._animTimeouts = this._animTimeouts.filter(id => id !== timeoutId);
-                    return GLib.SOURCE_REMOVE;
-                }
-
-                item.ease({
-                    opacity: 255,
-                    translation_y: 0,
-                    duration: 150,
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                });
-                this._animTimeouts = this._animTimeouts.filter(id => id !== timeoutId);
-                return GLib.SOURCE_REMOVE;
-            });
-            this._sourceIds.add(timeoutId);
-            this._animTimeouts.push(timeoutId);
+            item.opacity = 255;
+            item.translation_y = 0;
         }
 
         _connectTrackedSignal(target, signal, handler) {
@@ -2721,78 +2710,90 @@ const ClipboardIndicator = GObject.registerClass(
         }
 
         destroy() {
+            // Guard against re-entrant destroy (e.g. GC sweep triggering
+            // destroy on an actor that is already being torn down).
+            if (this._isDestroying || this._isDestroyed)
+                return;
+
             this._isDestroying = true;
 
-            if (this._cursorAnchor) {
-                this._cursorAnchor.destroy();
-                this._cursorAnchor = null;
-            }
-
-            if (this._clipboardChangeTimeout) {
-                GLib.source_remove(this._clipboardChangeTimeout);
-                this._sourceIds.delete(this._clipboardChangeTimeout);
-                this._clipboardChangeTimeout = null;
-            }
-
-            if (this._focusTimeout) {
-                GLib.source_remove(this._focusTimeout);
-                this._sourceIds.delete(this._focusTimeout);
-                this._focusTimeout = null;
-            }
-
-            if (this._menuRepositionIdleId) {
-                GLib.source_remove(this._menuRepositionIdleId);
-                this._sourceIds.delete(this._menuRepositionIdleId);
-                this._menuRepositionIdleId = null;
-            }
-
-            if (this._menuScrollResetIdleId) {
-                GLib.source_remove(this._menuScrollResetIdleId);
-                this._sourceIds.delete(this._menuScrollResetIdleId);
-                this._menuScrollResetIdleId = null;
-            }
-
-            if (this._ensureVisibleIdleId) {
-                GLib.source_remove(this._ensureVisibleIdleId);
-                this._sourceIds.delete(this._ensureVisibleIdleId);
-                this._ensureVisibleIdleId = null;
-            }
-
-            if (this._pasteTimeoutId) {
-                GLib.source_remove(this._pasteTimeoutId);
-                this._sourceIds.delete(this._pasteTimeoutId);
-                this._pasteTimeoutId = null;
-            }
-
-            if (this._animTimeouts) {
-                for (const id of this._animTimeouts) {
-                    GLib.source_remove(id);
-                    this._sourceIds.delete(id);
+            try {
+                if (this._cursorAnchor) {
+                    this._cursorAnchor.destroy();
+                    this._cursorAnchor = null;
                 }
-                this._animTimeouts = [];
+
+                if (this._clipboardChangeTimeout) {
+                    GLib.source_remove(this._clipboardChangeTimeout);
+                    this._sourceIds.delete(this._clipboardChangeTimeout);
+                    this._clipboardChangeTimeout = null;
+                }
+
+                if (this._focusTimeout) {
+                    GLib.source_remove(this._focusTimeout);
+                    this._sourceIds.delete(this._focusTimeout);
+                    this._focusTimeout = null;
+                }
+
+                if (this._menuRepositionIdleId) {
+                    GLib.source_remove(this._menuRepositionIdleId);
+                    this._sourceIds.delete(this._menuRepositionIdleId);
+                    this._menuRepositionIdleId = null;
+                }
+
+                if (this._menuScrollResetIdleId) {
+                    GLib.source_remove(this._menuScrollResetIdleId);
+                    this._sourceIds.delete(this._menuScrollResetIdleId);
+                    this._menuScrollResetIdleId = null;
+                }
+
+                if (this._ensureVisibleIdleId) {
+                    GLib.source_remove(this._ensureVisibleIdleId);
+                    this._sourceIds.delete(this._ensureVisibleIdleId);
+                    this._ensureVisibleIdleId = null;
+                }
+
+                if (this._pasteTimeoutId) {
+                    GLib.source_remove(this._pasteTimeoutId);
+                    this._sourceIds.delete(this._pasteTimeoutId);
+                    this._pasteTimeoutId = null;
+                }
+
+                if (this._animTimeouts) {
+                    for (const id of this._animTimeouts) {
+                        GLib.source_remove(id);
+                        this._sourceIds.delete(id);
+                    }
+                    this._animTimeouts = [];
+                }
+
+                this._clearPendingImageCapture();
+                this._stopTextExtractorMonitor();
+
+                this._disconnectTrackedSignals();
+
+                for (const id of this._sourceIds) {
+                    try {
+                        GLib.source_remove(id);
+                    } catch (_) { }
+                }
+                this._sourceIds.clear();
+
+                if (this._ownerChangedId) {
+                    this._selection.disconnect(this._ownerChangedId);
+                    this._ownerChangedId = null;
+                }
+
+                if (this._settingsChangedId) {
+                    this._settings.disconnect(this._settingsChangedId);
+                    this._settingsChangedId = null;
+                }
+
+                this._unregisterKeybindings();
+            } catch (e) {
+                logError('[Clipo] Error during destroy cleanup:', e);
             }
 
-            this._clearPendingImageCapture();
-            this._stopTextExtractorMonitor();
-
-            this._disconnectTrackedSignals();
-
-            for (const id of this._sourceIds) {
-                try {
-                    GLib.source_remove(id);
-                } catch (_) { }
-            }
-            this._sourceIds.clear();
-
-            if (this._ownerChangedId) {
-                this._selection.disconnect(this._ownerChangedId);
-            }
-
-            if (this._settingsChangedId) {
-                this._settings.disconnect(this._settingsChangedId);
-            }
-
-            this._unregisterKeybindings();
             this._isDestroyed = true;
             this._isDestroying = false;
 
@@ -2805,12 +2806,25 @@ const ClipboardIndicator = GObject.registerClass(
  */
 export default class ClipoExtension extends Extension {
     enable() {
+        // Destroy any leftover indicator from a previous enable() cycle
+        // to prevent "Extension point conflict" errors.
+        if (this._indicator) {
+            try {
+                this._indicator.destroy();
+            } catch (_) { }
+            this._indicator = null;
+        }
+
         this._indicator = new ClipboardIndicator(this);
         Main.panel.addToStatusArea('clipo', this._indicator);
     }
 
     disable() {
-        this._indicator?.destroy();
-        this._indicator = null;
+        if (this._indicator) {
+            try {
+                this._indicator.destroy();
+            } catch (_) { }
+            this._indicator = null;
+        }
     }
 }

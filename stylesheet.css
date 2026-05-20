@@ -65,15 +65,15 @@
 
 /* ── Search ─────────────────────────────────────────────── */
 .clipo-search-container {
-    padding: 4px 10px 6px 10px;
+    padding: 6px 10px 8px 10px;
     margin: 0;
     background-color: transparent;
 }
 
 .clipo-search-entry {
     border-radius: 4px;
-    min-height: 32px;
-    padding: 4px 10px;
+    min-height: 34px;
+    padding: 4px 9px;
     background-color: rgba(255, 255, 255, 0.055);
     border: 1px solid rgba(255, 255, 255, 0.06);
     color: rgba(255, 255, 255, 0.87);
@@ -138,8 +138,8 @@
 }
 
 .clipo-items-box {
-    padding: 2px 6px 6px 6px;
-    spacing: 2px;
+    padding: 4px 6px 8px 6px;
+    spacing: 1px;
 }
 
 /* ── Clipboard Item Card ─────────────────────────────────
@@ -148,17 +148,18 @@
  * ────────────────────────────────────────────────────────── */
 .clipo-item {
     border-radius: 4px;
-    padding: 8px 10px;
+    padding: 7px 9px;
     background-color: transparent;
     border: none;
     spacing: 0;
-    min-height: 0;
+    min-height: 34px;
     transition-duration: 100ms;
     transition-property: background-color;
 }
 
 .clipo-item-main {
     spacing: 8px;
+    min-width: 0;
 }
 
 .clipo-item:hover {
@@ -195,14 +196,16 @@
 .clipo-item-content {
     spacing: 2px;
     min-width: 0;
+    max-width: 100%;
 }
 
 .clipo-item-text {
     font-size: 13px;
     font-weight: 400;
-    color: rgba(255, 255, 255, 0.87);
+    color: rgba(255, 255, 255, 0.88);
     line-height: 1.35;
     min-width: 0;
+    max-width: 100%;
 }
 
 .clipo-item-actions {
@@ -219,15 +222,15 @@
 }
 
 .clipo-image-fallback-box {
-    min-height: 64px;
+    min-height: 44px;
     min-width: 48px;
-    background-color: rgba(255, 255, 255, 0.04);
+    background-color: rgba(255, 255, 255, 0.055);
     border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .clipo-image-fallback {
-    color: rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.38);
 }
 
 .clipo-thumbnail {
@@ -260,7 +263,7 @@
 .clipo-item-timestamp {
     font-size: 11px;
     font-weight: 400;
-    color: rgba(255, 255, 255, 0.00);
+    color: rgba(255, 255, 255, 0.26);
     transition-duration: 120ms;
     transition-property: color;
     margin-top: 0;
@@ -268,7 +271,7 @@
 
 .clipo-item:hover .clipo-item-timestamp,
 .clipo-item:focus .clipo-item-timestamp {
-    color: rgba(255, 255, 255, 0.30);
+    color: rgba(255, 255, 255, 0.42);
 }
 
 /* ── Image Preview Hover Popup ──────────────────────────── */
@@ -364,7 +367,7 @@
 .clipo-separator {
     height: 1px;
     background-color: rgba(255, 255, 255, 0.05);
-    margin: 2px 8px;
+    margin: 4px 8px;
 }
 
 /* ── Footer ─────────────────────────────────────────────── */
@@ -539,8 +542,8 @@
     font-size: 11px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.40);
-    letter-spacing: 0.3px;
-    padding: 6px 8px 2px 8px;
+    letter-spacing: 0;
+    padding: 6px 8px 3px 8px;
     margin-top: 2px;
 }
 
