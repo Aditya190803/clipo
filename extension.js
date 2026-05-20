@@ -1014,6 +1014,7 @@ const ClipboardIndicator = GObject.registerClass(
 
             this._lastTextExtractorFileMs = 0;
             this._textExtractorMonitor = null;
+            this._textExtractorMonitorChangedId = 0;
 
             // Cursor position captured at toggle time
             this._savedCursorX = 0;
@@ -1852,7 +1853,7 @@ const ClipboardIndicator = GObject.registerClass(
                                 Gio.FileMonitorFlags.NONE,
                                 null
                             );
-                            monitor.connect('changed', (_monitor, _file, _otherFile, eventType) => {
+                            self._textExtractorMonitorChangedId = monitor.connect('changed', (_monitor, _file, _otherFile, eventType) => {
                                 // CREATED or CHANGED means a new screenshot landed
                                 if (eventType === Gio.FileMonitorEvent.CREATED ||
                                     eventType === Gio.FileMonitorEvent.CHANGED) {
@@ -1919,6 +1920,13 @@ const ClipboardIndicator = GObject.registerClass(
 
         _stopTextExtractorMonitor() {
             if (this._textExtractorMonitor) {
+                if (this._textExtractorMonitorChangedId) {
+                    try {
+                        this._textExtractorMonitor.disconnect(this._textExtractorMonitorChangedId);
+                    } catch (_) { }
+                    this._textExtractorMonitorChangedId = 0;
+                }
+
                 try {
                     this._textExtractorMonitor.cancel();
                 } catch (_) { }
