@@ -148,11 +148,11 @@
  * ────────────────────────────────────────────────────────── */
 .clipo-item {
     border-radius: 4px;
-    padding: 7px 9px;
+    padding: 8px 9px;
     background-color: transparent;
     border: none;
     spacing: 0;
-    min-height: 34px;
+    min-height: 48px;
     transition-duration: 100ms;
     transition-property: background-color;
 }
@@ -209,10 +209,10 @@
 }
 
 .clipo-item-actions {
-    spacing: 2px;
-    min-width: 30px;
-    max-width: 30px;
-    padding-left: 2px;
+    spacing: 4px;
+    min-width: 36px;
+    max-width: 36px;
+    padding-left: 0;
 }
 
 /* ── Image Items ────────────────────────────────────────── */

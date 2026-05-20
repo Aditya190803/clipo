@@ -4,6 +4,7 @@
   "uuid": "clipo@Aditya190803",
   "shell-version": [ "48", "49", "50"],
   "url": "https://github.com/Aditya190803/clipo",
-  "version": 1,
+  "version": 2,
+  "version-name": "Updated Interface",
   "settings-schema": "org.gnome.shell.extensions.clipo"
 }
