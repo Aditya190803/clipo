@@ -96,10 +96,20 @@ pack: build
 	@echo "Ready for upload to extensions.gnome.org"
 
 dev: install
+	@if ! which inotifywait >/dev/null 2>&1; then \
+		echo ""; \
+		echo "❌ Error: 'inotifywait' is not installed."; \
+		echo "Please install 'inotify-tools' to use development mode."; \
+		echo "On Ubuntu/Debian: sudo apt install inotify-tools"; \
+		echo "On Fedora:         sudo dnf install inotify-tools"; \
+		echo "On Arch Linux:     sudo pacman -S inotify-tools"; \
+		echo ""; \
+		exit 1; \
+	fi
 	@echo "Development mode: Watching for changes... (Ctrl+C to stop)"
 	@echo ""
 	@while true; do \
-		inotifywait -qr -e modify -e create -e delete --exclude '\.git' .; \
+		inotifywait -qr -e modify -e create -e delete --exclude '\.git' . || exit 1; \
 		make install; \
 		echo ""; \
 		echo "Reinstalled at $$(date '+%H:%M:%S')"; \
