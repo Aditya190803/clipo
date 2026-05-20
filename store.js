@@ -39,13 +39,11 @@ function logDebug(...args) {
 }
 
 function logWarn(...args) {
-    if (DEBUG_LOGGING_ENABLED)
-        console.warn(...args);
+    console.warn('[Clipo/Store]', ...args);
 }
 
 function logError(...args) {
-    if (DEBUG_LOGGING_ENABLED)
-        console.error(...args);
+    console.error('[Clipo/Store]', ...args);
 }
 
 function readFileBytes(file) {
@@ -86,7 +84,7 @@ function readFileBytes(file) {
     } finally {
         try {
             stream?.close(null);
-        } catch (_) {}
+        } catch (_) { }
     }
 }
 
@@ -97,7 +95,7 @@ export class Store {
         this._nextDiskId = 1;
         this._uselessOpCount = 0;
         this._opQueue = Promise.resolve();
-        
+
         // Initialize storage directory
         this._cacheDir = GLib.build_filenamev([
             GLib.get_user_cache_dir(),
@@ -105,10 +103,11 @@ export class Store {
         ]);
         this._dbPath = GLib.build_filenamev([this._cacheDir, 'database.log']);
         this._imageCacheDir = GLib.build_filenamev([this._cacheDir, 'images']);
-        
+
         this._ensureDirectories();
+        this._cachedSizeBytes = -1;
     }
-    
+
     /**
      * Ensure required directories exist
      */
@@ -117,27 +116,27 @@ export class Store {
         if (!cacheDir.query_exists(null)) {
             cacheDir.make_directory_with_parents(null);
         }
-        
+
         const imageDir = Gio.File.new_for_path(this._imageCacheDir);
         if (!imageDir.query_exists(null)) {
             imageDir.make_directory_with_parents(null);
         }
     }
-    
+
     /**
      * Generate next unique ID
      */
     getNextId() {
         return this._nextId++;
     }
-    
+
     /**
      * Generate next disk ID
      */
     getNextDiskId() {
         return this._nextDiskId++;
     }
-    
+
     /**
      * Initialize store and load history from disk
      * @returns {{history: LinkedList, pinned: LinkedList}}
@@ -149,15 +148,15 @@ export class Store {
         if (!this.settings.get_boolean('persist-history')) {
             return { history, pinned };
         }
-        
+
         const dbFile = Gio.File.new_for_path(this._dbPath);
         if (!dbFile.query_exists(null)) {
             return { history, pinned };
         }
-        
+
         try {
             const entries = this._loadFromLogSync();
-            
+
             // Separate pinned and unpinned entries
             for (const entry of entries) {
                 if (entry.pinned) {
@@ -165,7 +164,7 @@ export class Store {
                 } else {
                     history.append(entry);
                 }
-                
+
                 // Track highest IDs
                 if (entry.id >= this._nextId) {
                     this._nextId = entry.id + 1;
@@ -179,37 +178,37 @@ export class Store {
             // Move corrupted database
             this._handleCorruptedDatabase();
         }
-        
+
         return { history, pinned };
     }
-    
+
     /**
      * Load entries from the log file (synchronous)
      */
     _loadFromLogSync() {
         const entries = new Map(); // diskId -> entry
         const file = Gio.File.new_for_path(this._dbPath);
-        
+
         if (!file.query_exists(null)) {
             return [];
         }
-        
+
         const stream = file.read(null);
         const dataStream = Gio.DataInputStream.new(stream);
         dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-        
+
         try {
             while (true) {
                 // Read operation type
                 const opType = dataStream.read_byte(null);
                 if (opType === 0) break; // EOF or invalid
-                
+
                 switch (opType) {
                     case OP_TYPE_SAVE_TEXT: {
                         const diskId = dataStream.read_uint32(null);
                         const timestamp = dataStream.read_int64(null);
                         const pinned = dataStream.read_byte(null) === 1;
-                        
+
                         // Read plain text
                         const plainLen = dataStream.read_uint32(null);
                         let plain = null;
@@ -217,7 +216,7 @@ export class Store {
                             const plainBytes = dataStream.read_bytes(plainLen, null);
                             plain = new TextDecoder().decode(plainBytes.get_data());
                         }
-                        
+
                         // Read rich text
                         const richLen = dataStream.read_uint32(null);
                         let rich = null;
@@ -225,21 +224,21 @@ export class Store {
                             const richBytes = dataStream.read_bytes(richLen, null);
                             rich = new TextDecoder().decode(richBytes.get_data());
                         }
-                        
+
                         const entry = new ClipboardEntry(this.getNextId(), 'text', { plain, rich });
                         entry.diskId = diskId;
                         entry.timestamp = Number(timestamp);
                         entry.pinned = pinned;
-                        
+
                         entries.set(diskId, entry);
                         break;
                     }
-                    
+
                     case OP_TYPE_SAVE_IMAGE: {
                         const diskId = dataStream.read_uint32(null);
                         const timestamp = dataStream.read_int64(null);
                         const pinned = dataStream.read_byte(null) === 1;
-                        
+
                         // Read image path
                         const pathLen = dataStream.read_uint32(null);
                         let imagePath = null;
@@ -247,7 +246,7 @@ export class Store {
                             const pathBytes = dataStream.read_bytes(pathLen, null);
                             imagePath = new TextDecoder().decode(pathBytes.get_data());
                         }
-                        
+
                         // Load image data if file exists
                         let imageData = null;
                         if (imagePath) {
@@ -256,47 +255,47 @@ export class Store {
                                 imageData = readFileBytes(imageFile);
                             }
                         }
-                        
+
                         if (imageData) {
                             const entry = new ClipboardEntry(this.getNextId(), 'image', imageData);
                             entry.diskId = diskId;
                             entry.timestamp = Number(timestamp);
                             entry.pinned = pinned;
                             entry._imagePath = imagePath;
-                            
+
                             entries.set(diskId, entry);
                         }
                         break;
                     }
-                    
+
                     case OP_TYPE_DELETE: {
                         const diskId = dataStream.read_uint32(null);
                         entries.delete(diskId);
                         this._uselessOpCount++;
                         break;
                     }
-                    
+
                     case OP_TYPE_PIN: {
                         const diskId = dataStream.read_uint32(null);
                         const entry = entries.get(diskId);
                         if (entry) entry.pinned = true;
                         break;
                     }
-                    
+
                     case OP_TYPE_UNPIN: {
                         const diskId = dataStream.read_uint32(null);
                         const entry = entries.get(diskId);
                         if (entry) entry.pinned = false;
                         break;
                     }
-                    
+
                     case OP_TYPE_MOVE_TO_TOP: {
                         // This is handled by order in compacted log
                         dataStream.read_uint32(null);
                         this._uselessOpCount++;
                         break;
                     }
-                    
+
                     default:
                         logWarn(`[Clipo] Unknown operation type: ${opType}`);
                         break;
@@ -307,13 +306,13 @@ export class Store {
                 logError('[Clipo] Error reading log:', e);
             }
         }
-        
+
         stream.close(null);
-        
+
         // Return entries sorted by timestamp (newest first)
         return Array.from(entries.values()).sort((a, b) => b.timestamp - a.timestamp);
     }
-    
+
     /**
      * Handle corrupted database file
      */
@@ -321,7 +320,7 @@ export class Store {
         const dbFile = Gio.File.new_for_path(this._dbPath);
         const corruptedPath = GLib.build_filenamev([this._cacheDir, 'corrupted.log']);
         const corruptedFile = Gio.File.new_for_path(corruptedPath);
-        
+
         try {
             dbFile.move(corruptedFile, Gio.FileCopyFlags.OVERWRITE, null, null);
             logDebug('[Clipo] Moved corrupted database to corrupted.log');
@@ -329,7 +328,7 @@ export class Store {
             logError('[Clipo] Failed to move corrupted database:', e);
         }
     }
-    
+
     /**
      * Queue an async operation
      */
@@ -339,7 +338,7 @@ export class Store {
         });
         return this._opQueue;
     }
-    
+
     /**
      * Save a text entry to disk
      */
@@ -347,16 +346,16 @@ export class Store {
         if (!this.settings.get_boolean('persist-history')) {
             return;
         }
-        
+
         if (this.settings.get_boolean('save-only-pinned') && !entry.pinned) {
             return;
         }
-        
+
         return this._queueOp(() => {
             if (!entry.diskId) {
                 entry.diskId = this.getNextDiskId();
             }
-            
+
             const file = Gio.File.new_for_path(this._dbPath);
             const stream = file.append_to(
                 Gio.FileCreateFlags.NONE,
@@ -364,33 +363,37 @@ export class Store {
             );
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-            
+
             // Write operation
             dataStream.put_byte(OP_TYPE_SAVE_TEXT, null);
             dataStream.put_uint32(entry.diskId, null);
             dataStream.put_int64(entry.timestamp, null);
             dataStream.put_byte(entry.pinned ? 1 : 0, null);
-            
+
             // Write plain text
             const plainBytes = entry.plain ? new TextEncoder().encode(entry.plain) : new Uint8Array(0);
             dataStream.put_uint32(plainBytes.length, null);
             if (plainBytes.length > 0) {
                 dataStream.write_bytes(new GLib.Bytes(plainBytes), null);
             }
-            
+
             // Write rich text
             const richBytes = entry.rich ? new TextEncoder().encode(entry.rich) : new Uint8Array(0);
             dataStream.put_uint32(richBytes.length, null);
             if (richBytes.length > 0) {
                 dataStream.write_bytes(new GLib.Bytes(richBytes), null);
             }
-            
+
             stream.close(null);
-            
+
+            // Track growth: header (1+4+8+1 = 14) + plainLen (4) + plain + richLen (4) + rich
+            const opBytes = 14 + 4 + plainBytes.length + 4 + richBytes.length;
+            this._adjustCacheSize(opBytes);
+
             this._maybeCompact();
         });
     }
-    
+
     /**
      * Save an image entry to disk
      */
@@ -398,27 +401,27 @@ export class Store {
         if (!this.settings.get_boolean('persist-history')) {
             return;
         }
-        
+
         if (!this.settings.get_boolean('enable-images')) {
             return;
         }
-        
+
         if (this.settings.get_boolean('save-only-pinned') && !entry.pinned) {
             return;
         }
-        
+
         return this._queueOp(() => {
             if (!entry.diskId) {
                 entry.diskId = this.getNextDiskId();
             }
-            
+
             // Save image to file
             const imagePath = GLib.build_filenamev([
                 this._imageCacheDir,
                 `${entry.diskId}.png`
             ]);
             entry._imagePath = imagePath;
-            
+
             const imageFile = Gio.File.new_for_path(imagePath);
             const imageStream = imageFile.replace(
                 null,
@@ -432,7 +435,7 @@ export class Store {
                 imageStream.write_bytes(imageBytes, null);
             }
             imageStream.close(null);
-            
+
             // Write to log
             const file = Gio.File.new_for_path(this._dbPath);
             const stream = file.append_to(
@@ -441,22 +444,27 @@ export class Store {
             );
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-            
+
             dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
             dataStream.put_uint32(entry.diskId, null);
             dataStream.put_int64(entry.timestamp, null);
             dataStream.put_byte(entry.pinned ? 1 : 0, null);
-            
+
             const pathBytes = new TextEncoder().encode(imagePath);
             dataStream.put_uint32(pathBytes.length, null);
             dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
-            
+
             stream.close(null);
-            
+
+            // Track growth: image file bytes + log op header (1+4+8+1+4 = 18) + path
+            const imageSize = imageBytes ? imageBytes.get_size() : 0;
+            const logOpBytes = 18 + pathBytes.length;
+            this._adjustCacheSize(imageSize + logOpBytes);
+
             this._maybeCompact();
         });
     }
-    
+
     /**
      * Delete an entry from disk
      */
@@ -464,7 +472,7 @@ export class Store {
         if (!entry.diskId) {
             return;
         }
-        
+
         return this._queueOp(() => {
             const file = Gio.File.new_for_path(this._dbPath);
             const stream = file.append_to(
@@ -473,27 +481,32 @@ export class Store {
             );
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-            
+
             dataStream.put_byte(OP_TYPE_DELETE, null);
             dataStream.put_uint32(entry.diskId, null);
-            
+
             stream.close(null);
-            
+
             // Delete image file if exists
             if (entry._imagePath) {
                 try {
                     const imageFile = Gio.File.new_for_path(entry._imagePath);
+                    const info = imageFile.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+                    const freedBytes = info.get_size();
                     imageFile.delete(null);
+                    this._adjustCacheSize(-freedBytes);
                 } catch (e) {
                     // Ignore if file doesn't exist
                 }
             }
-            
+
+            // Delete op is small (1+4 = 5 bytes) but the log grows
+            this._adjustCacheSize(5);
             this._uselessOpCount++;
             this._maybeCompact();
         });
     }
-    
+
     /**
      * Update pin status
      */
@@ -509,7 +522,7 @@ export class Store {
             }
             return;
         }
-        
+
         return this._queueOp(() => {
             const file = Gio.File.new_for_path(this._dbPath);
             const stream = file.append_to(
@@ -518,10 +531,10 @@ export class Store {
             );
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-            
+
             dataStream.put_byte(pinned ? OP_TYPE_PIN : OP_TYPE_UNPIN, null);
             dataStream.put_uint32(entry.diskId, null);
-            
+
             stream.close(null);
         });
     }
@@ -541,7 +554,7 @@ export class Store {
             this._rewritePersistedEntries(entries);
         });
     }
-    
+
     /**
      * Compact the log if needed
      */
@@ -549,16 +562,18 @@ export class Store {
         if (this._uselessOpCount < COMPACT_THRESHOLD || this._isCompacting) {
             return;
         }
-        
+
         logDebug('[Clipo] Compacting database...');
         this._isCompacting = true;
         GLib.idle_add(GLib.PRIORITY_LOW, () => {
-             this._compact();
-             this._isCompacting = false;
-             return GLib.SOURCE_REMOVE;
+            this._compact();
+            this._isCompacting = false;
+            // After compaction rewrites the log, re-seed the cached size
+            this._recomputeCacheSize();
+            return GLib.SOURCE_REMOVE;
         });
     }
-    
+
     /**
      * Compact the log by rewriting only active entries
      */
@@ -566,14 +581,14 @@ export class Store {
         let entries;
         try {
             entries = this._loadFromLogSync();
-        } catch(e) {
+        } catch (e) {
             return;
         }
-        
+
         // Write new compacted log
         const tempPath = GLib.build_filenamev([this._cacheDir, 'database.tmp']);
         const tempFile = Gio.File.new_for_path(tempPath);
-        
+
         const stream = tempFile.replace(
             null,
             false,
@@ -583,20 +598,20 @@ export class Store {
         const bufferedStream = Gio.BufferedOutputStream.new(stream);
         const dataStream = Gio.DataOutputStream.new(bufferedStream);
         dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-        
+
         for (const entry of entries) {
             if (entry.type === 'text') {
                 dataStream.put_byte(OP_TYPE_SAVE_TEXT, null);
                 dataStream.put_uint32(entry.diskId, null);
                 dataStream.put_int64(entry.timestamp, null);
                 dataStream.put_byte(entry.pinned ? 1 : 0, null);
-                
+
                 const plainBytes = entry.plain ? new TextEncoder().encode(entry.plain) : new Uint8Array(0);
                 dataStream.put_uint32(plainBytes.length, null);
                 if (plainBytes.length > 0) {
                     dataStream.write_bytes(new GLib.Bytes(plainBytes), null);
                 }
-                
+
                 const richBytes = entry.rich ? new TextEncoder().encode(entry.rich) : new Uint8Array(0);
                 dataStream.put_uint32(richBytes.length, null);
                 if (richBytes.length > 0) {
@@ -607,16 +622,18 @@ export class Store {
                 dataStream.put_uint32(entry.diskId, null);
                 dataStream.put_int64(entry.timestamp, null);
                 dataStream.put_byte(entry.pinned ? 1 : 0, null);
-                
+
                 const pathBytes = new TextEncoder().encode(entry._imagePath);
                 dataStream.put_uint32(pathBytes.length, null);
                 dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
             }
         }
-        
-        bufferedStream.flush(null);
-        stream.close(null);
-        
+
+        // Flush the buffered stream, then close the chain in the right order
+        try { dataStream.flush(null); } catch (_) { }
+        try { bufferedStream.close(null); } catch (_) { }
+        try { stream.close(null); } catch (_) { }
+
         // Replace old log with new one
         const dbFile = Gio.File.new_for_path(this._dbPath);
         try {
@@ -625,10 +642,10 @@ export class Store {
             logDebug(`[Clipo] Compacted ${entries.length} entries`);
         } catch (e) {
             logError('[Clipo] Failed to replace db during compact', e);
-            try { tempFile.delete(null); } catch(ex){}
+            try { tempFile.delete(null); } catch (ex) { }
         }
     }
-    
+
     /**
      * Clear all non-pinned entries from disk
      */
@@ -636,7 +653,7 @@ export class Store {
         return this._queueOp(() => {
             const entries = this._loadFromLogSync();
             const pinned = entries.filter(e => e.pinned);
-            
+
             // Delete image files for non-pinned entries
             for (const entry of entries) {
                 if (!entry.pinned && entry._imagePath) {
@@ -648,7 +665,7 @@ export class Store {
                     }
                 }
             }
-            
+
             // Rewrite log with only pinned entries
             const file = Gio.File.new_for_path(this._dbPath);
             const stream = file.replace(
@@ -659,20 +676,20 @@ export class Store {
             );
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
-            
+
             for (const entry of pinned) {
                 if (entry.type === 'text') {
                     dataStream.put_byte(OP_TYPE_SAVE_TEXT, null);
                     dataStream.put_uint32(entry.diskId, null);
                     dataStream.put_int64(entry.timestamp, null);
                     dataStream.put_byte(1, null);
-                    
+
                     const plainBytes = entry.plain ? new TextEncoder().encode(entry.plain) : new Uint8Array(0);
                     dataStream.put_uint32(plainBytes.length, null);
                     if (plainBytes.length > 0) {
                         dataStream.write_bytes(new GLib.Bytes(plainBytes), null);
                     }
-                    
+
                     const richBytes = entry.rich ? new TextEncoder().encode(entry.rich) : new Uint8Array(0);
                     dataStream.put_uint32(richBytes.length, null);
                     if (richBytes.length > 0) {
@@ -683,47 +700,74 @@ export class Store {
                     dataStream.put_uint32(entry.diskId, null);
                     dataStream.put_int64(entry.timestamp, null);
                     dataStream.put_byte(1, null);
-                    
+
                     const pathBytes = new TextEncoder().encode(entry._imagePath);
                     dataStream.put_uint32(pathBytes.length, null);
                     dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
                 }
             }
-            
+
             stream.close(null);
             this._uselessOpCount = 0;
         });
     }
-    
+
     /**
      * Get total cache size
      */
+    /**
+     * Returns a cached estimate of the total cache size in bytes.
+     * The first call computes the real value (synchronous I/O — fine during
+     * init()), all subsequent calls return the incrementally-maintained
+     * counter so the GNOME Shell main loop is never blocked.
+     */
     getCacheSize() {
+        if (this._cachedSizeBytes < 0)
+            this._recomputeCacheSize();
+        return this._cachedSizeBytes;
+    }
+
+    /**
+     * Full filesystem scan — called once at init or after compaction.
+     * Do NOT call this from a hot path.
+     */
+    _recomputeCacheSize() {
         let totalSize = 0;
-        
-        // Log file size
-        const dbFile = Gio.File.new_for_path(this._dbPath);
-        if (dbFile.query_exists(null)) {
-            const info = dbFile.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
-            totalSize += info.get_size();
-        }
-        
-        // Image cache size
-        const imageDir = Gio.File.new_for_path(this._imageCacheDir);
-        if (imageDir.query_exists(null)) {
-            const enumerator = imageDir.enumerate_children(
-                'standard::size',
-                Gio.FileQueryInfoFlags.NONE,
-                null
-            );
-            
-            let fileInfo;
-            while ((fileInfo = enumerator.next_file(null)) !== null) {
-                totalSize += fileInfo.get_size();
+
+        try {
+            const dbFile = Gio.File.new_for_path(this._dbPath);
+            if (dbFile.query_exists(null)) {
+                const info = dbFile.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+                totalSize += info.get_size();
             }
-        }
-        
-        return totalSize;
+        } catch (_) { /* ignore */ }
+
+        try {
+            const imageDir = Gio.File.new_for_path(this._imageCacheDir);
+            if (imageDir.query_exists(null)) {
+                const enumerator = imageDir.enumerate_children(
+                    'standard::size',
+                    Gio.FileQueryInfoFlags.NONE,
+                    null
+                );
+
+                let fileInfo;
+                while ((fileInfo = enumerator.next_file(null)) !== null) {
+                    totalSize += fileInfo.get_size();
+                }
+            }
+        } catch (_) { /* ignore */ }
+
+        this._cachedSizeBytes = totalSize;
+    }
+
+    /**
+     * Adjust the tracked cache size by delta bytes (positive = growth).
+     * Called internally after successful save/delete operations.
+     */
+    _adjustCacheSize(deltaBytes) {
+        if (this._cachedSizeBytes >= 0)
+            this._cachedSizeBytes = Math.max(0, this._cachedSizeBytes + deltaBytes);
     }
 
     _clearPersistedData() {

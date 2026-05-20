@@ -93,7 +93,7 @@
     <key name="has-text-extractor-extension" type="b">
       <default>false</default>
       <summary>Text Extractor integration enabled</summary>
-      <description>When enabled, avoid storing temporary screenshots from text-extractor@aditya190803 during OCR workflows</description>
+      <description>When enabled, avoid storing temporary screenshots from text-extractor@Aditya190803 during OCR workflows</description>
     </key>
     
     <key name="top-bar-display" type="s">
@@ -132,6 +132,24 @@
       <default>true</default>
       <summary>Ignore password fields</summary>
       <description>Do not capture clipboard content from password fields</description>
+    </key>
+
+    <key name="ignore-high-entropy" type="b">
+      <default>true</default>
+      <summary>Block high-entropy strings (passwords)</summary>
+      <description>Do not store random-looking strings that are likely passwords or tokens</description>
+    </key>
+
+    <key name="ignore-api-keys" type="b">
+      <default>true</default>
+      <summary>Block API keys</summary>
+      <description>Do not store strings matching common API key patterns (sk-, ghp_, Bearer, etc.)</description>
+    </key>
+
+    <key name="ignore-credit-cards" type="b">
+      <default>true</default>
+      <summary>Block credit card numbers</summary>
+      <description>Do not store strings that look like credit or debit card numbers</description>
     </key>
     
     <key name="save-only-pinned" type="b">

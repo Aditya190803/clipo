@@ -365,7 +365,8 @@ export default class ClipoPreferences extends ExtensionPreferences {
         
         const displayModes = ['icon', 'text', 'both', 'none'];
         const currentMode = settings.get_string('top-bar-display');
-        displayModeRow.set_selected(displayModes.indexOf(currentMode));
+        const selectedDisplayMode = Math.max(0, displayModes.indexOf(currentMode));
+        displayModeRow.set_selected(selectedDisplayMode);
         
         displayModeRow.connect('notify::selected', () => {
             settings.set_string('top-bar-display', displayModes[displayModeRow.selected]);
@@ -389,7 +390,8 @@ export default class ClipoPreferences extends ExtensionPreferences {
         
         const positions = ['cursor', 'center'];
         const currentPos = settings.get_string('popup-position');
-        popupPositionRow.set_selected(positions.indexOf(currentPos));
+        const selectedPosition = Math.max(0, positions.indexOf(currentPos));
+        popupPositionRow.set_selected(selectedPosition);
         
         popupPositionRow.connect('notify::selected', () => {
             settings.set_string('popup-position', positions[popupPositionRow.selected]);
@@ -499,13 +501,44 @@ export default class ClipoPreferences extends ExtensionPreferences {
         settings.bind('private-mode', privateModeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         privacyGroup.add(privateModeRow);
         
-        // Ignore passwords
-        const ignorePasswordsRow = new Adw.SwitchRow({
-            title: _('Ignore Password Fields'),
-            subtitle: _('Do not capture clipboard from password managers'),
+        // Ignore passwords — expandable with per-category sub-options
+        const ignorePasswordsRow = new Adw.ExpanderRow({
+            title: _('Block Sensitive Content'),
+            subtitle: _('Do not store passwords, API keys, or card numbers'),
+            show_enable_switch: true,
+            expanded: settings.get_boolean('ignore-passwords'),
         });
-        settings.bind('ignore-passwords', ignorePasswordsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        ignorePasswordsRow.set_enable_expansion(settings.get_boolean('ignore-passwords'));
+        settings.bind('ignore-passwords', ignorePasswordsRow, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
         privacyGroup.add(ignorePasswordsRow);
+
+        // Sub-row: high-entropy passwords / tokens
+        const ignoreHighEntropyRow = new Adw.SwitchRow({
+            title: _('Passwords & Tokens'),
+            subtitle: _('Block random-looking strings (high entropy): passwords, bearer tokens, secrets'),
+        });
+        settings.bind('ignore-high-entropy', ignoreHighEntropyRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('ignore-passwords', ignoreHighEntropyRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        ignorePasswordsRow.add_row(ignoreHighEntropyRow);
+
+        // Sub-row: API keys
+        const ignoreApiKeysRow = new Adw.SwitchRow({
+            title: _('API Keys'),
+            subtitle: _('Block known API key formats: sk-…, ghp_…, AKIA…, Bearer …, etc.'),
+        });
+        settings.bind('ignore-api-keys', ignoreApiKeysRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('ignore-passwords', ignoreApiKeysRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        ignorePasswordsRow.add_row(ignoreApiKeysRow);
+
+        // Sub-row: credit / debit card numbers
+        const ignoreCreditCardsRow = new Adw.SwitchRow({
+            title: _('Card Numbers'),
+            subtitle: _('Block 13–19 digit strings that match credit or debit card patterns'),
+        });
+        settings.bind('ignore-credit-cards', ignoreCreditCardsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('ignore-passwords', ignoreCreditCardsRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        ignorePasswordsRow.add_row(ignoreCreditCardsRow);
+
         
         // Persistence Group
         const persistenceGroup = new Adw.PreferencesGroup({

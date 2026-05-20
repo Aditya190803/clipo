@@ -20,7 +20,7 @@ A lightweight, fast, keyboard-driven clipboard manager for GNOME Shell.
 
 ### Prerequisites
 
-- GNOME Shell 45+
+- GNOME Shell 48+
 - Wayland or X11 session
 - `glib-compile-schemas` (usually pre-installed)
 
@@ -99,7 +99,6 @@ make enable
 | **Clear All** | Click the trash button in the action bar |
 | **Settings** | Click the ⚙️ gear icon |
 | **Toggle Private Mode** | Click the 🛡️ shield icon |
-| **Navigate Pages** | Click arrow buttons or use page numbers |
 
 ### Search Features
 
@@ -258,7 +257,7 @@ Removes compiled schemas and build artifacts.
 
 ## Requirements
 
-- **GNOME Shell**: 45+ (tested on 45, 46, 47, 48)
+- **GNOME Shell**: 48+ (supports 48, 49, 50)
 - **Session Type**: X11 or Wayland
 - **Arch/Distro**: Any GNOME-based Linux (Fedora, Ubuntu, Debian, Arch, etc.)
 
