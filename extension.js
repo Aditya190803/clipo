@@ -32,6 +32,7 @@ const IMAGE_PREVIEW_MARGIN = 24;
 const IMAGE_PREVIEW_FRAME = 12;
 const IMAGE_PREVIEW_MAX_WIDTH = 560;
 const IMAGE_PREVIEW_MAX_HEIGHT = 360;
+const MAX_IMAGE_PIXELS = 20 * 1000 * 1000;
 const OCR_IMAGE_HOLD_MS = 2200;
 const OCR_TEXT_MATCH_WINDOW_MS = 3000;
 const OCR_MIN_TEXT_LENGTH = 8;
@@ -206,7 +207,7 @@ function bytesEqual(left, right) {
 }
 
 function getImageSignature(data) {
-    const bytes = data instanceof GLib.Bytes ? data.toArray() : data;
+    const bytes = data instanceof GLib.Bytes ? data.get_data() : data;
     if (!bytes || bytes.length < 4)
         return 'unknown';
 
@@ -222,6 +223,110 @@ function getImageSignature(data) {
         return 'riff';
 
     return 'unknown';
+}
+
+function readUint16BE(bytes, offset) {
+    return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function readUint32BE(bytes, offset) {
+    return (
+        (bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3]
+    ) >>> 0;
+}
+
+function readUint32LE(bytes, offset) {
+    return (
+        bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24)
+    ) >>> 0;
+}
+
+function getImageDimensions(data) {
+    const bytes = data instanceof GLib.Bytes ? data.get_data() : data;
+    if (!bytes || bytes.length < 10)
+        return null;
+
+    try {
+        // PNG IHDR
+        if (bytes.length >= 24 &&
+            bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47 &&
+            bytes[12] === 0x49 && bytes[13] === 0x48 && bytes[14] === 0x44 && bytes[15] === 0x52) {
+            return {
+                width: readUint32BE(bytes, 16),
+                height: readUint32BE(bytes, 20),
+            };
+        }
+
+        // JPEG SOF markers
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+            let offset = 2;
+            while (offset + 9 < bytes.length) {
+                if (bytes[offset] !== 0xFF) {
+                    offset++;
+                    continue;
+                }
+
+                const marker = bytes[offset + 1];
+                if (marker === 0xD9 || marker === 0xDA)
+                    break;
+
+                const segmentLength = readUint16BE(bytes, offset + 2);
+                if (segmentLength < 2)
+                    break;
+
+                if ((marker >= 0xC0 && marker <= 0xC3) ||
+                    (marker >= 0xC5 && marker <= 0xC7) ||
+                    (marker >= 0xC9 && marker <= 0xCB) ||
+                    (marker >= 0xCD && marker <= 0xCF)) {
+                    return {
+                        width: readUint16BE(bytes, offset + 7),
+                        height: readUint16BE(bytes, offset + 5),
+                    };
+                }
+
+                offset += 2 + segmentLength;
+            }
+        }
+
+        // GIF logical screen descriptor
+        if (bytes.length >= 10 &&
+            bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+            return {
+                width: bytes[6] | (bytes[7] << 8),
+                height: bytes[8] | (bytes[9] << 8),
+            };
+        }
+
+        // BMP DIB header
+        if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4D) {
+            return {
+                width: readUint32LE(bytes, 18),
+                height: Math.abs(readUint32LE(bytes, 22)),
+            };
+        }
+    } catch (_) {
+        return null;
+    }
+
+    return null;
+}
+
+function isOversizedImage(data) {
+    const dimensions = getImageDimensions(data);
+    if (!dimensions)
+        return false;
+
+    const { width, height } = dimensions;
+    if (!width || !height)
+        return false;
+
+    return width * height > MAX_IMAGE_PIXELS;
 }
 
 // Sensitive content patterns
@@ -391,7 +496,7 @@ const ClipboardItem = GObject.registerClass(
             let pixbuf = null;
             if (this.entry.imageData) {
                 try {
-                    pixbuf = this._loadPixbuf(this.entry.imageData);
+                    pixbuf = this._loadPixbufForBounds(this.entry.imageData, this._getThumbnailBounds());
                 } catch (e) {
                     logError('[Clipo] Failed to load image preview:', e);
                 }
@@ -399,26 +504,22 @@ const ClipboardItem = GObject.registerClass(
 
             if (pixbuf) {
                 try {
-                    const thumbnailPixbuf = this._createLargeThumbnail(pixbuf);
-                    if (thumbnailPixbuf) {
-                        const thumbWidth = thumbnailPixbuf.get_width();
-                        const thumbHeight = thumbnailPixbuf.get_height();
+                    const thumbWidth = pixbuf.get_width();
+                    const thumbHeight = pixbuf.get_height();
 
-                        const thumbnailWidget = this._createPixbufActor(
-                            thumbnailPixbuf,
-                            'clipo-thumbnail',
-                            thumbWidth,
-                            thumbHeight
-                        );
+                    const thumbnailWidget = this._createPixbufActor(
+                        pixbuf,
+                        'clipo-thumbnail',
+                        thumbWidth,
+                        thumbHeight
+                    );
 
-                        if (thumbnailWidget) {
-                            this._contentBox.add_child(thumbnailWidget);
-                            // Pass the already-loaded pixbuf to avoid a second decode
-                            this._contentBox.add_child(this._buildImageMeta(pixbuf));
-                            this._thumbnailActor = thumbnailWidget;
-                            this._setupImageHoverPreview();
-                            return;
-                        }
+                    if (thumbnailWidget) {
+                        this._contentBox.add_child(thumbnailWidget);
+                        this._contentBox.add_child(this._buildImageMeta());
+                        this._thumbnailActor = thumbnailWidget;
+                        this._setupImageHoverPreview();
+                        return;
                     }
                 } catch (e) {
                     logError('Failed to create thumbnail:', e);
@@ -474,6 +575,40 @@ const ClipboardItem = GObject.registerClass(
                 return null;
             } finally {
                 try { stream.close(null); } catch (e) { }
+            }
+        }
+
+        _loadPixbufForBounds(imageData, bounds) {
+            if (!imageData) return null;
+
+            const gbytes = toGBytes(imageData);
+            if (!gbytes || gbytes.get_size() === 0) {
+                logError('[Clipo] Invalid image data: empty or null');
+                return null;
+            }
+
+            const stream = Gio.MemoryInputStream.new_from_bytes(gbytes);
+            try {
+                const pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
+                    stream,
+                    bounds.width,
+                    bounds.height,
+                    true,
+                    null
+                );
+                if (!pixbuf) {
+                    logError('[Clipo] Failed to create scaled pixbuf from stream');
+                    return null;
+                }
+                return pixbuf;
+            } catch (e) {
+                logError(
+                    `[Clipo] Failed to decode scaled image (size=${gbytes.get_size()} signature=${getImageSignature(gbytes)}):`,
+                    e.message
+                );
+                return null;
+            } finally {
+                try { stream.close(null); } catch (_) { }
             }
         }
 
@@ -592,9 +727,11 @@ const ClipboardItem = GObject.registerClass(
             let sizeText = '';
 
             try {
-                // Accept a pre-loaded pixbuf to avoid reloading image data from scratch
-                const pixbuf = cachedPixbuf || (this.entry.imageData ? this._loadPixbuf(this.entry.imageData) : null);
-                if (pixbuf) {
+                const parsedDimensions = this.entry.imageData ? getImageDimensions(this.entry.imageData) : null;
+                if (parsedDimensions) {
+                    dimensions = `${parsedDimensions.width}×${parsedDimensions.height}`;
+                } else if (cachedPixbuf) {
+                    const pixbuf = cachedPixbuf;
                     dimensions = `${pixbuf.get_width()}×${pixbuf.get_height()}`;
                 }
             } catch (_) {
@@ -651,13 +788,19 @@ const ClipboardItem = GObject.registerClass(
                 return;
 
             try {
-                const pixbuf = this._loadPixbuf(this.entry.imageData);
+                const dimensions = getImageDimensions(this.entry.imageData);
+                let origWidth = dimensions?.width || 0;
+                let origHeight = dimensions?.height || 0;
+                let fullPixbuf = null;
 
-                if (!pixbuf) return;
-                if (!this._isAlive()) return;
+                if (!origWidth || !origHeight) {
+                    fullPixbuf = this._loadPixbuf(this.entry.imageData);
+                    if (!fullPixbuf) return;
+                    if (!this._isAlive()) return;
 
-                const origWidth = pixbuf.get_width();
-                const origHeight = pixbuf.get_height();
+                    origWidth = fullPixbuf.get_width();
+                    origHeight = fullPixbuf.get_height();
+                }
 
                 const monitor = Main.layoutManager?.currentMonitor;
                 const monitorBoundWidth = monitor ? Math.max(160, monitor.width - IMAGE_PREVIEW_MARGIN * 2) : IMAGE_PREVIEW_MAX_WIDTH;
@@ -673,11 +816,12 @@ const ClipboardItem = GObject.registerClass(
                     previewHeight = Math.floor(origHeight * scale);
                 }
 
-                const scaledPixbuf = pixbuf.scale_simple(
-                    previewWidth,
-                    previewHeight,
-                    GdkPixbuf.InterpType.BILINEAR
-                );
+                const scaledPixbuf = (fullPixbuf && previewWidth === origWidth && previewHeight === origHeight)
+                    ? fullPixbuf
+                    : this._loadPixbufForBounds(this.entry.imageData, {
+                        width: previewWidth,
+                        height: previewHeight,
+                    });
 
                 if (!scaledPixbuf || !this._isAlive()) {
                     return;
@@ -803,6 +947,14 @@ const ClipboardItem = GObject.registerClass(
                 Math.max(1, Math.floor(height * scale)),
                 GdkPixbuf.InterpType.BILINEAR
             );
+        }
+
+        _getThumbnailBounds() {
+            const configuredMenuWidth = this._indicator?._settings?.get_int('window-width') || 400;
+            return {
+                width: Math.max(140, configuredMenuWidth - 100),
+                height: 120,
+            };
         }
 
         _formatPreview(text) {
@@ -1722,6 +1874,11 @@ const ClipboardIndicator = GObject.registerClass(
             if (imageSize === 0) return;
             if (imageSize > maxSize) {
                 logWarn(`[Clipo] Skipping image over limit (${Math.round(imageSize / (1024 * 1024))}MB > ${this._settings.get_int('max-image-size')}MB)`);
+                return;
+            }
+            if (isOversizedImage(normalizedData)) {
+                const dimensions = getImageDimensions(normalizedData);
+                logWarn(`[Clipo] Skipping oversized image (${dimensions.width}×${dimensions.height})`);
                 return;
             }
 
