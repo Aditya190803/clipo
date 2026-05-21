@@ -14,6 +14,7 @@ const OP_TYPE_DELETE = 3;
 const OP_TYPE_PIN = 4;
 const OP_TYPE_UNPIN = 5;
 const OP_TYPE_MOVE_TO_TOP = 6;
+const OP_TYPE_SAVE_IMAGE_V2 = 7;
 
 // Thresholds
 const COMPACT_THRESHOLD = 500; // Compact after this many wasted operations
@@ -85,6 +86,42 @@ function readFileBytes(file) {
         try {
             stream?.close(null);
         } catch (_) { }
+    }
+}
+
+function readString(dataStream) {
+    const length = dataStream.read_uint32(null);
+    if (length <= 0)
+        return null;
+
+    const bytes = dataStream.read_bytes(length, null);
+    return new TextDecoder().decode(bytes.get_data());
+}
+
+function writeString(dataStream, value) {
+    const bytes = value ? new TextEncoder().encode(value) : new Uint8Array(0);
+    dataStream.put_uint32(bytes.length, null);
+    if (bytes.length > 0)
+        dataStream.write_bytes(new GLib.Bytes(bytes), null);
+    return bytes.length;
+}
+
+function getImageExtension(mimeType) {
+    switch (mimeType) {
+        case 'image/jpeg':
+        case 'image/jpg':
+            return 'jpg';
+        case 'image/webp':
+            return 'webp';
+        case 'image/gif':
+            return 'gif';
+        case 'image/bmp':
+            return 'bmp';
+        case 'image/tiff':
+            return 'tiff';
+        case 'image/png':
+        default:
+            return 'png';
     }
 }
 
@@ -239,29 +276,40 @@ export class Store {
                         const timestamp = dataStream.read_int64(null);
                         const pinned = dataStream.read_byte(null) === 1;
 
-                        // Read image path
-                        const pathLen = dataStream.read_uint32(null);
-                        let imagePath = null;
-                        if (pathLen > 0) {
-                            const pathBytes = dataStream.read_bytes(pathLen, null);
-                            imagePath = new TextDecoder().decode(pathBytes.get_data());
-                        }
+                        const imagePath = readString(dataStream);
 
-                        // Load image data if file exists
-                        let imageData = null;
-                        if (imagePath) {
-                            const imageFile = Gio.File.new_for_path(imagePath);
-                            if (imageFile.query_exists(null)) {
-                                imageData = readFileBytes(imageFile);
-                            }
-                        }
-
-                        if (imageData) {
-                            const entry = new ClipboardEntry(this.getNextId(), 'image', imageData);
+                        if (imagePath && Gio.File.new_for_path(imagePath).query_exists(null)) {
+                            const entry = new ClipboardEntry(this.getNextId(), 'image', {
+                                path: imagePath,
+                                mimeType: 'image/png',
+                            });
                             entry.diskId = diskId;
                             entry.timestamp = Number(timestamp);
                             entry.pinned = pinned;
-                            entry._imagePath = imagePath;
+
+                            entries.set(diskId, entry);
+                        }
+                        break;
+                    }
+
+                    case OP_TYPE_SAVE_IMAGE_V2: {
+                        const diskId = dataStream.read_uint32(null);
+                        const timestamp = dataStream.read_int64(null);
+                        const pinned = dataStream.read_byte(null) === 1;
+                        const width = dataStream.read_uint32(null);
+                        const height = dataStream.read_uint32(null);
+                        const mimeType = readString(dataStream) || 'image/png';
+                        const imagePath = readString(dataStream);
+
+                        if (imagePath && Gio.File.new_for_path(imagePath).query_exists(null)) {
+                            const entry = new ClipboardEntry(this.getNextId(), 'image', {
+                                path: imagePath,
+                                mimeType,
+                                dimensions: width && height ? { width, height } : null,
+                            });
+                            entry.diskId = diskId;
+                            entry.timestamp = Number(timestamp);
+                            entry.pinned = pinned;
 
                             entries.set(diskId, entry);
                         }
@@ -415,26 +463,30 @@ export class Store {
                 entry.diskId = this.getNextDiskId();
             }
 
-            // Save image to file
-            const imagePath = GLib.build_filenamev([
-                this._imageCacheDir,
-                `${entry.diskId}.png`
-            ]);
-            entry._imagePath = imagePath;
-
-            const imageFile = Gio.File.new_for_path(imagePath);
-            const imageStream = imageFile.replace(
-                null,
-                false,
-                Gio.FileCreateFlags.NONE,
-                null
-            );
-
             const imageBytes = toGLibBytes(entry.imageData);
-            if (imageBytes) {
-                imageStream.write_bytes(imageBytes, null);
+            const mimeType = entry.imageMimeType || 'image/png';
+
+            if (!entry._imagePath) {
+                entry._imagePath = GLib.build_filenamev([
+                    this._imageCacheDir,
+                    `${entry.diskId}.${getImageExtension(mimeType)}`
+                ]);
             }
-            imageStream.close(null);
+
+            if (imageBytes) {
+                const imageFile = Gio.File.new_for_path(entry._imagePath);
+                const imageStream = imageFile.replace(
+                    null,
+                    false,
+                    Gio.FileCreateFlags.NONE,
+                    null
+                );
+
+                imageStream.write_bytes(imageBytes, null);
+                imageStream.close(null);
+            } else if (!Gio.File.new_for_path(entry._imagePath).query_exists(null)) {
+                return;
+            }
 
             // Write to log
             const file = Gio.File.new_for_path(this._dbPath);
@@ -445,24 +497,51 @@ export class Store {
             const dataStream = Gio.DataOutputStream.new(stream);
             dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
 
-            dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
-            dataStream.put_uint32(entry.diskId, null);
-            dataStream.put_int64(entry.timestamp, null);
-            dataStream.put_byte(entry.pinned ? 1 : 0, null);
-
-            const pathBytes = new TextEncoder().encode(imagePath);
-            dataStream.put_uint32(pathBytes.length, null);
-            dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
+            const logOpBytes = this._writeImageEntry(dataStream, entry);
 
             stream.close(null);
 
-            // Track growth: image file bytes + log op header (1+4+8+1+4 = 18) + path
+            // Track growth: image file bytes + log metadata.
             const imageSize = imageBytes ? imageBytes.get_size() : 0;
-            const logOpBytes = 18 + pathBytes.length;
             this._adjustCacheSize(imageSize + logOpBytes);
 
             this._maybeCompact();
         });
+    }
+
+    loadImageData(entry) {
+        if (entry.imageData)
+            return toGLibBytes(entry.imageData);
+
+        if (!entry._imagePath)
+            return null;
+
+        const imageFile = Gio.File.new_for_path(entry._imagePath);
+        if (!imageFile.query_exists(null))
+            return null;
+
+        const bytes = readFileBytes(imageFile);
+        if (!bytes)
+            return null;
+
+        entry.imageData = toGLibBytes(bytes);
+        return entry.imageData;
+    }
+
+    getEntryDiskSize(entry) {
+        if (!entry)
+            return 0;
+
+        if (entry.type !== 'image' || !entry._imagePath)
+            return entry.getByteSize?.() || 0;
+
+        try {
+            const imageFile = Gio.File.new_for_path(entry._imagePath);
+            const info = imageFile.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+            return info.get_size();
+        } catch (_) {
+            return entry.getByteSize?.() || 0;
+        }
     }
 
     /**
@@ -537,6 +616,24 @@ export class Store {
 
             stream.close(null);
         });
+    }
+
+    _writeImageEntry(dataStream, entry) {
+        const dimensions = entry.imageDimensions || {};
+        const width = dimensions.width || 0;
+        const height = dimensions.height || 0;
+
+        dataStream.put_byte(OP_TYPE_SAVE_IMAGE_V2, null);
+        dataStream.put_uint32(entry.diskId, null);
+        dataStream.put_int64(entry.timestamp, null);
+        dataStream.put_byte(entry.pinned ? 1 : 0, null);
+        dataStream.put_uint32(width, null);
+        dataStream.put_uint32(height, null);
+
+        const mimeBytes = writeString(dataStream, entry.imageMimeType || 'image/png');
+        const pathBytes = writeString(dataStream, entry._imagePath || null);
+
+        return 1 + 4 + 8 + 1 + 4 + 4 + 4 + mimeBytes + 4 + pathBytes;
     }
 
     syncFromLists(historyEntries, pinnedEntries) {
@@ -618,14 +715,7 @@ export class Store {
                     dataStream.write_bytes(new GLib.Bytes(richBytes), null);
                 }
             } else if (entry.type === 'image' && entry._imagePath) {
-                dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
-                dataStream.put_uint32(entry.diskId, null);
-                dataStream.put_int64(entry.timestamp, null);
-                dataStream.put_byte(entry.pinned ? 1 : 0, null);
-
-                const pathBytes = new TextEncoder().encode(entry._imagePath);
-                dataStream.put_uint32(pathBytes.length, null);
-                dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
+                this._writeImageEntry(dataStream, entry);
             }
         }
 
@@ -696,14 +786,7 @@ export class Store {
                         dataStream.write_bytes(new GLib.Bytes(richBytes), null);
                     }
                 } else if (entry.type === 'image' && entry._imagePath) {
-                    dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
-                    dataStream.put_uint32(entry.diskId, null);
-                    dataStream.put_int64(entry.timestamp, null);
-                    dataStream.put_byte(1, null);
-
-                    const pathBytes = new TextEncoder().encode(entry._imagePath);
-                    dataStream.put_uint32(pathBytes.length, null);
-                    dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
+                    this._writeImageEntry(dataStream, entry);
                 }
             }
 
@@ -800,6 +883,7 @@ export class Store {
         }
 
         this._uselessOpCount = 0;
+        this._cachedSizeBytes = 0;
     }
 
     _rewritePersistedEntries(entries) {
@@ -818,11 +902,11 @@ export class Store {
                 }
             }
 
-            if (entry.type === 'image' && entry.imageData) {
+            if (entry.type === 'image' && entry.imageData && !entry._imagePath) {
                 if (!entry._imagePath) {
                     entry._imagePath = GLib.build_filenamev([
                         this._imageCacheDir,
-                        `${entry.diskId}.png`,
+                        `${entry.diskId}.${getImageExtension(entry.imageMimeType || 'image/png')}`,
                     ]);
                 }
 
@@ -890,14 +974,7 @@ export class Store {
                     dataStream.write_bytes(new GLib.Bytes(richBytes), null);
                 }
             } else if (entry.type === 'image' && entry._imagePath) {
-                dataStream.put_byte(OP_TYPE_SAVE_IMAGE, null);
-                dataStream.put_uint32(entry.diskId, null);
-                dataStream.put_int64(entry.timestamp, null);
-                dataStream.put_byte(entry.pinned ? 1 : 0, null);
-
-                const pathBytes = new TextEncoder().encode(entry._imagePath);
-                dataStream.put_uint32(pathBytes.length, null);
-                dataStream.write_bytes(new GLib.Bytes(pathBytes), null);
+                this._writeImageEntry(dataStream, entry);
             }
         }
 

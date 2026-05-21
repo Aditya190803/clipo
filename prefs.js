@@ -298,7 +298,8 @@ export default class ClipoPreferences extends ExtensionPreferences {
         // Show thumbnails
         const showThumbnailsRow = new Adw.SwitchRow({
             title: _('Show Thumbnails'),
-            subtitle: _('Display image thumbnails in the menu'),
+            subtitle: _('Temporarily disabled for GNOME Shell stability'),
+            sensitive: false,
         });
         settings.bind('show-thumbnails', showThumbnailsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         imagesGroup.add(showThumbnailsRow);

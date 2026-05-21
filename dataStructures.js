@@ -15,6 +15,9 @@ export class ClipboardEntry {
         this.plain = null;
         this.rich = null;
         this.imageData = null;
+        this.imageMimeType = 'image/png';
+        this.imageDimensions = null;
+        this._imagePath = null;
         
         // Set content based on type
         if (type === 'text') {
@@ -25,13 +28,21 @@ export class ClipboardEntry {
                 this.plain = content;
             }
         } else if (type === 'image') {
-            this.imageData = content;
+            if (content && typeof content === 'object' && !(content instanceof Uint8Array) && !content.get_size) {
+                this.imageData = content.data || null;
+                this.imageMimeType = content.mimeType || 'image/png';
+                this.imageDimensions = content.dimensions || null;
+                this._imagePath = content.path || null;
+            } else {
+                this.imageData = content;
+            }
         }
         
         // Linked list pointers
         this.next = null;
         this.prev = null;
         this.list = null;
+        this._listHash = null;
         
         // UI reference
         this.menuItem = null;
@@ -57,6 +68,8 @@ export class ClipboardEntry {
         if (this.imageData) {
             size += this.imageData.get_size?.() ?? this.imageData.length ?? 0;
         }
+        if (this.imageDimensions)
+            size += 16;
         return size;
     }
     
@@ -78,11 +91,14 @@ export class ClipboardEntry {
             }
             return hash;
         }
-        // For images, use byte length
-        if (!this.imageData)
-            return 0;
+        if (this.type === 'image') {
+            if (this.imageData)
+                return `${this.imageMimeType}:${this.imageData.get_size?.() ?? this.imageData.length ?? 0}`;
 
-        return this.imageData.get_size?.() ?? this.imageData.length ?? 0;
+            return this._imagePath ? `${this.imageMimeType}:${this._imagePath}` : 0;
+        }
+
+        return 0;
     }
     
     /**
@@ -110,7 +126,7 @@ export class LinkedList {
         this.byteSize = 0;
         
         // Inverted index for O(1) duplicate detection
-        // hash -> entry
+        // hash -> Set<entry>
         this.index = new Map();
         
         // ID to entry map for O(1) lookup
@@ -143,7 +159,10 @@ export class LinkedList {
         // Update indices
         this.idMap.set(entry.id, entry);
         const hash = entry.getHash();
-        this.index.set(hash, entry);
+        entry._listHash = hash;
+        if (!this.index.has(hash))
+            this.index.set(hash, new Set());
+        this.index.get(hash).add(entry);
         
         return entry;
     }
@@ -174,7 +193,10 @@ export class LinkedList {
         // Update indices
         this.idMap.set(entry.id, entry);
         const hash = entry.getHash();
-        this.index.set(hash, entry);
+        entry._listHash = hash;
+        if (!this.index.has(hash))
+            this.index.set(hash, new Set());
+        this.index.get(hash).add(entry);
         
         return entry;
     }
@@ -205,14 +227,18 @@ export class LinkedList {
         
         // Update indices
         this.idMap.delete(entry.id);
-        const hash = entry.getHash();
-        if (this.index.get(hash) === entry) {
-            this.index.delete(hash);
+        const hash = entry._listHash ?? entry.getHash();
+        const bucket = this.index.get(hash);
+        if (bucket) {
+            bucket.delete(entry);
+            if (bucket.size === 0)
+                this.index.delete(hash);
         }
         
         entry.list = null;
         entry.next = null;
         entry.prev = null;
+        entry._listHash = null;
         
         return true;
     }
@@ -233,7 +259,8 @@ export class LinkedList {
      * Find duplicate entry by hash
      */
     findDuplicate(hash) {
-        return this.index.get(hash) || null;
+        const bucket = this.index.get(hash);
+        return bucket ? bucket.values().next().value || null : null;
     }
     
     /**
@@ -281,6 +308,7 @@ export class LinkedList {
             current.list = null;
             current.next = null;
             current.prev = null;
+            current._listHash = null;
             current = next;
         }
         
