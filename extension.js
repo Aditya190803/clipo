@@ -26,6 +26,12 @@ const CLIPBOARD_TYPE = St.ClipboardType.CLIPBOARD;
 const GET_DEFAULT_CLIPBOARD = St.Clipboard.get_default.bind(St.Clipboard);
 const MAX_PREVIEW_LENGTH = 150;
 const MAX_IMAGE_PIXELS = 20 * 1000 * 1000;
+const IMAGE_THUMBNAIL_MAX_WIDTH = 220;
+const IMAGE_THUMBNAIL_MAX_HEIGHT = 96;
+const IMAGE_THUMBNAIL_DECODE_SCALE = 2;
+const IMAGE_PREVIEW_MAX_WIDTH = 700;
+const IMAGE_PREVIEW_MAX_HEIGHT = 500;
+const IMAGE_PREVIEW_PADDING = 8;
 const OCR_IMAGE_HOLD_MS = 2200;
 const OCR_TEXT_MATCH_WINDOW_MS = 3000;
 const OCR_MIN_TEXT_LENGTH = 8;
@@ -143,53 +149,38 @@ function bytesEqual(left, right) {
         return true;
 
     // Fast path: if both are GLib.Bytes, use the native C-level comparison
-    // which avoids creating any JS-side array copies (prevents OOM on large images).
     if (left instanceof GLib.Bytes && right instanceof GLib.Bytes) {
         if (typeof left.equal === 'function') {
             return left.equal(right);
         }
-        // Fallback: compare via native get_data() which returns the same
-        // backing buffer without a full copy when possible.
     }
 
-    // For large images (>256 KB) do a fast sampled comparison to avoid
-    // blocking the GNOME Shell main loop with a full byte-by-byte scan.
-    // We check the first 512 bytes, last 512 bytes, and 16 evenly-spaced
-    // samples across the middle — enough to detect any real difference.
     const SAMPLE_THRESHOLD = 256 * 1024;
 
-    // Only convert to arrays when absolutely necessary, and only for
-    // small data. For large data, we sample from get_data() instead.
-    let leftBytes, rightBytes;
+    // For large images, do a reliable, high-performance SHA-256 checksum comparison
+    // using GLib's optimized native implementation.
     if (leftLength > SAMPLE_THRESHOLD) {
-        // Use get_data() which may share the backing buffer without a full copy
-        leftBytes = left instanceof GLib.Bytes ? left.get_data() : left;
-        rightBytes = right instanceof GLib.Bytes ? right.get_data() : right;
+        try {
+            const leftData = left instanceof GLib.Bytes ? left.get_data() : left;
+            const rightData = right instanceof GLib.Bytes ? right.get_data() : right;
 
-        if (!leftBytes || !rightBytes)
-            return false;
+            if (!leftData || !rightData)
+                return false;
 
-        const EDGE = 512;
-        const SAMPLES = 16;
-        // Check head
-        for (let i = 0; i < Math.min(EDGE, leftLength); i++) {
-            if (leftBytes[i] !== rightBytes[i]) return false;
+            const chkLeft = new GLib.Checksum(GLib.ChecksumType.SHA256);
+            chkLeft.update(leftData);
+
+            const chkRight = new GLib.Checksum(GLib.ChecksumType.SHA256);
+            chkRight.update(rightData);
+
+            return chkLeft.get_string() === chkRight.get_string();
+        } catch (e) {
+            logError('Error using GLib.Checksum for bytesEqual comparison:', e);
         }
-        // Check tail
-        for (let i = leftLength - Math.min(EDGE, leftLength); i < leftLength; i++) {
-            if (leftBytes[i] !== rightBytes[i]) return false;
-        }
-        // Check evenly-spaced samples in middle
-        const step = Math.floor(leftLength / (SAMPLES + 1));
-        for (let s = 1; s <= SAMPLES; s++) {
-            const i = s * step;
-            if (leftBytes[i] !== rightBytes[i]) return false;
-        }
-        return true;
     }
 
-    leftBytes = left instanceof GLib.Bytes ? left.toArray() : left;
-    rightBytes = right instanceof GLib.Bytes ? right.toArray() : right;
+    const leftBytes = left instanceof GLib.Bytes ? left.toArray() : left;
+    const rightBytes = right instanceof GLib.Bytes ? right.toArray() : right;
 
     for (let i = 0; i < leftLength; i++) {
         if (leftBytes[i] !== rightBytes[i])
@@ -219,6 +210,15 @@ function readUint32LE(bytes, offset) {
         (bytes[offset + 2] << 16) |
         (bytes[offset + 3] << 24)
     ) >>> 0;
+}
+
+function readInt32LE(bytes, offset) {
+    return (
+        bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24)
+    ) | 0;
 }
 
 function getImageDimensions(data) {
@@ -281,7 +281,7 @@ function getImageDimensions(data) {
         if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4D) {
             return {
                 width: readUint32LE(bytes, 18),
-                height: Math.abs(readUint32LE(bytes, 22)),
+                height: Math.abs(readInt32LE(bytes, 22)),
             };
         }
     } catch (_) {
@@ -289,6 +289,21 @@ function getImageDimensions(data) {
     }
 
     return null;
+}
+
+function getImageFileDimensions(file) {
+    if (!file)
+        return null;
+
+    try {
+        const [ok, contents] = file.load_contents(null);
+        if (!ok || !contents)
+            return null;
+
+        return getImageDimensions(contents);
+    } catch (_) {
+        return null;
+    }
 }
 
 function isOversizedImage(data) {
@@ -343,7 +358,9 @@ const ClipboardItem = GObject.registerClass(
     class ClipboardItem extends St.BoxLayout {
         _init(entry, indicator) {
             super._init({
-                style_class: 'clipo-item',
+                style_class: entry.type === 'text'
+                    ? 'clipo-item clipo-text-item'
+                    : 'clipo-item clipo-image-item',
                 vertical: false,
                 reactive: true,
                 can_focus: true,
@@ -366,6 +383,7 @@ const ClipboardItem = GObject.registerClass(
             const mainBox = new St.BoxLayout({
                 vertical: false,
                 x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
                 style_class: 'clipo-item-main',
             });
 
@@ -463,7 +481,54 @@ const ClipboardItem = GObject.registerClass(
         }
 
         _buildImagePreview() {
-            this._addImageFallback();
+            const imagePath = this.entry._imagePath;
+            const showThumbnails = this._indicator?._settings.get_boolean('show-thumbnails') ?? true;
+
+            if (!showThumbnails || !imagePath) {
+                this._addImageFallback();
+                return;
+            }
+
+            try {
+                const file = Gio.File.new_for_path(imagePath);
+                if (!file.query_exists(null)) {
+                    this._addImageFallback();
+                    return;
+                }
+
+                this._imageFile = file;
+
+                const { scaleFactor } = St.ThemeContext.get_for_stage(global.stage);
+                const thumbnailSize = this._getThumbnailSize();
+                const thumbnail = St.TextureCache.get_default().load_file_async(
+                    file,
+                    thumbnailSize.width * IMAGE_THUMBNAIL_DECODE_SCALE,
+                    thumbnailSize.height * IMAGE_THUMBNAIL_DECODE_SCALE,
+                    scaleFactor,
+                    1
+                );
+                thumbnail.style_class = 'clipo-thumbnail';
+                thumbnail.width = thumbnailSize.width;
+                thumbnail.height = thumbnailSize.height;
+                thumbnail.x_expand = false;
+                thumbnail.y_expand = false;
+                thumbnail.contentGravity = Clutter.ContentGravity.RESIZE_ASPECT;
+
+                const row = new St.Bin({
+                    x_expand: true,
+                    x_align: Clutter.ActorAlign.START,
+                    y_align: Clutter.ActorAlign.CENTER,
+                    style_class: 'clipo-image-row',
+                    width: thumbnailSize.width,
+                    height: thumbnailSize.height,
+                    child: thumbnail,
+                });
+
+                this._contentBox.add_child(row);
+            } catch (e) {
+                logWarn('Could not render image thumbnail:', e);
+                this._addImageFallback();
+            }
         }
 
         _addImageFallback() {
@@ -483,58 +548,158 @@ const ClipboardItem = GObject.registerClass(
             }));
 
             this._contentBox.add_child(fallbackBox);
-            this._contentBox.add_child(this._buildImageMeta());
         }
 
-        _buildImageMeta(cachedPixbuf = null) {
-            let dimensions = '';
-            let sizeText = '';
+        _getImageDimensions() {
+            if (this.entry.imageDimensions)
+                return this.entry.imageDimensions;
 
-            try {
-                const parsedDimensions = this.entry.imageDimensions
-                    || (this.entry.imageData ? getImageDimensions(this.entry.imageData) : null);
-                if (parsedDimensions) {
-                    dimensions = `${parsedDimensions.width}×${parsedDimensions.height}`;
-                } else if (cachedPixbuf) {
-                    const pixbuf = cachedPixbuf;
-                    dimensions = `${pixbuf.get_width()}×${pixbuf.get_height()}`;
-                }
-            } catch (_) {
-                dimensions = '';
-            }
+            const dimensions = (this.entry.imageData ? getImageDimensions(this.entry.imageData) : null)
+                || getImageFileDimensions(this._imageFile);
 
-            const bytes = getByteLength(this.entry.imageData);
-            if (bytes > 0)
-                sizeText = `${Math.max(1, Math.round(bytes / 1024))} KB`;
+            if (dimensions)
+                this.entry.imageDimensions = dimensions;
 
-            const mimeText = this.entry.imageMimeType || '';
-            const meta = [dimensions, sizeText, mimeText].filter(Boolean).join('  •  ');
+            return dimensions;
+        }
 
-            const infoBox = new St.BoxLayout({
-                vertical: true,
-                style_class: 'clipo-image-info',
-                x_expand: true,
-            });
+        _getThumbnailSize() {
+            const dimensions = this._getImageDimensions();
+            const sourceWidth = Math.max(1, dimensions?.width || IMAGE_THUMBNAIL_MAX_WIDTH);
+            const sourceHeight = Math.max(1, dimensions?.height || IMAGE_THUMBNAIL_MAX_HEIGHT);
+            const scale = Math.min(
+                1,
+                IMAGE_THUMBNAIL_MAX_WIDTH / sourceWidth,
+                IMAGE_THUMBNAIL_MAX_HEIGHT / sourceHeight
+            );
 
-            infoBox.add_child(new St.Label({
-                text: _('Image'),
-                style_class: 'clipo-image-label',
-                x_expand: true,
-            }));
-
-            if (meta) {
-                infoBox.add_child(new St.Label({
-                    text: meta,
-                    style_class: 'clipo-image-meta',
-                    x_expand: true,
-                }));
-            }
-
-            return infoBox;
+            return {
+                width: Math.max(1, Math.round(sourceWidth * scale)),
+                height: Math.max(1, Math.round(sourceHeight * scale)),
+            };
         }
 
         _hideImagePreview() {
-            this._previewPopup = null;
+            if (this._previewPopup) {
+                try {
+                    this._previewPopup.destroy();
+                } catch (_) { }
+                this._previewPopup = null;
+            }
+
+            if (this._indicator?._activePreviewItem === this)
+                this._indicator._activePreviewItem = null;
+        }
+
+        _showImagePreview() {
+            if (this.entry.type !== 'image' || !this._imageFile || this._previewPopup || !this._isAlive())
+                return;
+
+            try {
+                this._indicator?._hideActiveImagePreview(this);
+
+                const { scaleFactor } = St.ThemeContext.get_for_stage(global.stage);
+                const previewSize = this._getPreviewSize();
+                const previewImage = St.TextureCache.get_default().load_file_async(
+                    this._imageFile,
+                    previewSize.imageWidth,
+                    previewSize.imageHeight,
+                    scaleFactor,
+                    1
+                );
+                previewImage.width = previewSize.imageWidth;
+                previewImage.height = previewSize.imageHeight;
+                previewImage.contentGravity = Clutter.ContentGravity.RESIZE_ASPECT;
+
+                const popup = new St.Bin({
+                    style_class: 'clipo-image-preview-popup',
+                    child: previewImage,
+                    width: previewSize.popupWidth,
+                    height: previewSize.popupHeight,
+                });
+
+                Main.uiGroup.add_child(popup);
+                this._previewPopup = popup;
+                if (this._indicator)
+                    this._indicator._activePreviewItem = this;
+                this._positionImagePreview();
+            } catch (e) {
+                logWarn('Could not show image preview:', e);
+                this._hideImagePreview();
+            }
+        }
+
+        _getPreviewSize() {
+            const dimensions = this._getImageDimensions();
+            const sourceWidth = Math.max(1, dimensions?.width || IMAGE_PREVIEW_MAX_WIDTH);
+            const sourceHeight = Math.max(1, dimensions?.height || IMAGE_PREVIEW_MAX_HEIGHT);
+            const [itemX, itemY] = this.get_transformed_position();
+            const monitor = this._indicator?._getMonitorForPoint(itemX, itemY)
+                || Main.layoutManager.currentMonitor
+                || Main.layoutManager.monitors?.[0];
+            // Use at most 50% of monitor dimension for the preview
+            const maxWidth = monitor
+                ? Math.min(IMAGE_PREVIEW_MAX_WIDTH, Math.max(IMAGE_THUMBNAIL_MAX_WIDTH, Math.round(monitor.width * 0.50)))
+                : IMAGE_PREVIEW_MAX_WIDTH;
+            const maxHeight = monitor
+                ? Math.min(IMAGE_PREVIEW_MAX_HEIGHT, Math.max(IMAGE_THUMBNAIL_MAX_HEIGHT, Math.round(monitor.height * 0.50)))
+                : IMAGE_PREVIEW_MAX_HEIGHT;
+            const scale = Math.min(
+                1,
+                maxWidth / sourceWidth,
+                maxHeight / sourceHeight
+            );
+            const imageWidth = Math.max(1, Math.round(sourceWidth * scale));
+            const imageHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+            return {
+                imageWidth,
+                imageHeight,
+                popupWidth: imageWidth + IMAGE_PREVIEW_PADDING * 2,
+                popupHeight: imageHeight + IMAGE_PREVIEW_PADDING * 2,
+            };
+        }
+
+        _positionImagePreview() {
+            if (!this._previewPopup || !this._isAlive())
+                return;
+
+            const [itemX, itemY] = this.get_transformed_position();
+            const [itemWidth] = this.get_transformed_size();
+            const previewWidth = this._previewPopup.width || IMAGE_PREVIEW_MAX_WIDTH + IMAGE_PREVIEW_PADDING * 2;
+            const previewHeight = this._previewPopup.height || IMAGE_PREVIEW_MAX_HEIGHT + IMAGE_PREVIEW_PADDING * 2;
+            const gap = 12;
+
+            const monitor = this._indicator?._getMonitorForPoint(itemX, itemY)
+                || Main.layoutManager.currentMonitor
+                || Main.layoutManager.monitors?.[0];
+            if (!monitor)
+                return;
+
+            // Get the menu's actual bounding box to avoid overlapping it
+            const menuActor = this._indicator?.menu?._boxPointer?.actor || this._indicator?.menu?.actor;
+            let menuRight = itemX + itemWidth;
+            let menuLeft = itemX;
+            if (menuActor && !isActorDestroyed(menuActor)) {
+                try {
+                    const [menuX] = menuActor.get_transformed_position();
+                    const [menuW] = menuActor.get_transformed_size();
+                    if (menuX != null && menuW != null) {
+                        menuLeft = menuX;
+                        menuRight = menuX + menuW;
+                    }
+                } catch (_) { }
+            }
+
+            const rightX = menuRight + gap;
+            const leftX = menuLeft - previewWidth - gap;
+            const maxX = monitor.x + monitor.width - previewWidth - POPUP_EDGE_MARGIN;
+            const minX = monitor.x + POPUP_EDGE_MARGIN;
+            const x = rightX <= maxX ? rightX : Math.max(minX, leftX);
+            const maxY = monitor.y + monitor.height - previewHeight - POPUP_EDGE_MARGIN;
+            const y = Math.max(monitor.y + POPUP_EDGE_MARGIN, Math.min(itemY, maxY));
+
+            this._previewPopup.set_position(x, y);
         }
 
         _formatPreview(text) {
@@ -591,14 +756,27 @@ const ClipboardItem = GObject.registerClass(
         }
 
         _connectSignals() {
-            this.connect('key-focus-in', () => {
+            this._connectTrackedSignal(this, 'key-focus-in', () => {
                 this._indicator?._queueEnsureActorVisible(this);
+                this._showImagePreview();
+            });
+
+            this._connectTrackedSignal(this, 'key-focus-out', () => {
+                this._hideImagePreview();
+            });
+
+            this._connectTrackedSignal(this, 'enter-event', () => {
+                this._showImagePreview();
+                return Clutter.EVENT_PROPAGATE;
+            });
+
+            this._connectTrackedSignal(this, 'leave-event', () => {
+                this._hideImagePreview();
+                return Clutter.EVENT_PROPAGATE;
             });
 
             // Single key-press-event handler that covers both navigation and activation.
-            // Previously there were TWO separate key-press-event connections here which
-            // caused the second one to be untracked and leaked, and could fire twice.
-            this.connect('key-press-event', (actor, event) => {
+            this._connectTrackedSignal(this, 'key-press-event', (actor, event) => {
                 const key = event.get_key_symbol();
                 if (key === Clutter.KEY_Down) {
                     const next = this._indicator?._findFocusableSibling(this, 1);
@@ -624,7 +802,7 @@ const ClipboardItem = GObject.registerClass(
                 return Clutter.EVENT_PROPAGATE;
             });
 
-            this.connect('button-press-event', (actor, event) => {
+            this._connectTrackedSignal(this, 'button-press-event', (actor, event) => {
                 if (event.get_button() === 1) { // Left click
                     this._indicator._selectEntry(this.entry);
                     return Clutter.EVENT_STOP;
@@ -729,8 +907,10 @@ const ClipboardIndicator = GObject.registerClass(
             this._selectedEntry = null;
             this._menuNeedsRefresh = false;
             this._menuIsOpen = false;
+            this._activePreviewItem = null;
             this._debouncing = 0;
             this._privateMode = this._settings.get_boolean('private-mode');
+            this._isResettingSearch = false;
             this._clipboardChangeTimeout = null;
             this._pendingImageCapture = null;
             this._pendingImageTimeout = null;
@@ -804,6 +984,14 @@ const ClipboardIndicator = GObject.registerClass(
             this.visible = (mode !== 'none');
         }
 
+        _getPopupWidth() {
+            return Math.max(this._settings.get_int('window-width') || 0, 560);
+        }
+
+        _getPopupHeight() {
+            return Math.max(this._settings.get_int('window-height') || 0, 650);
+        }
+
         _isAlive() {
             return !this._isDestroying && !this._isDestroyed;
         }
@@ -851,8 +1039,8 @@ const ClipboardIndicator = GObject.registerClass(
             if (!menuActor || isActorDestroyed(menuActor))
                 return;
 
-            const configuredWidth = this._settings.get_int('window-width') || 400;
-            const configuredHeight = this._settings.get_int('window-height') || 500;
+            const configuredWidth = this._getPopupWidth();
+            const configuredHeight = this._getPopupHeight();
             const [measuredWidth, measuredHeight] = typeof menuActor.get_transformed_size === 'function'
                 ? menuActor.get_transformed_size()
                 : [0, 0];
@@ -860,7 +1048,7 @@ const ClipboardIndicator = GObject.registerClass(
             const menuHeight = Math.max(1, Math.round(measuredHeight || menuActor.height || configuredHeight));
 
             let x = Math.floor(pointerX);
-            let y = Math.floor(pointerY);
+            let y = monitor.y + POPUP_EDGE_MARGIN;
 
             const minX = monitor.x + POPUP_EDGE_MARGIN;
             const minY = monitor.y + POPUP_EDGE_MARGIN;
@@ -904,7 +1092,7 @@ const ClipboardIndicator = GObject.registerClass(
             this._overrideMenuPositioning();
 
             this.menu.actor.add_style_class_name('clipo-popup-menu');
-            this.menu.actor.style = `width: ${this._settings.get_int('window-width') || 400}px`;
+            this.menu.actor.style = `width: ${this._getPopupWidth()}px`;
 
             // Header bar with label and actions
             const headerItem = new PopupMenu.PopupBaseMenuItem({
@@ -916,6 +1104,7 @@ const ClipboardIndicator = GObject.registerClass(
             const headerBox = new St.BoxLayout({
                 vertical: false,
                 x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
                 style_class: 'clipo-header-box',
             });
 
@@ -953,7 +1142,7 @@ const ClipboardIndicator = GObject.registerClass(
                 can_focus: true,
                 y_align: Clutter.ActorAlign.CENTER,
             });
-            this._clearButton.connect('clicked', () => this._clearHistory());
+            this._connectTrackedSignal(this._clearButton, 'clicked', () => this._clearHistory());
             headerBox.add_child(this._clearButton);
 
             headerItem.add_child(headerBox);
@@ -979,8 +1168,8 @@ const ClipboardIndicator = GObject.registerClass(
                 style_class: 'clipo-search-icon',
             }));
 
-            this._searchEntry.clutter_text.connect('text-changed', () => this._onSearchChanged());
-            this._searchEntry.clutter_text.connect('key-press-event', (actor, event) => {
+            this._connectTrackedSignal(this._searchEntry.clutter_text, 'text-changed', () => this._onSearchChanged());
+            this._connectTrackedSignal(this._searchEntry.clutter_text, 'key-press-event', (actor, event) => {
                 const symbol = event.get_key_symbol();
 
                 if (symbol === Clutter.KEY_Down) {
@@ -995,7 +1184,9 @@ const ClipboardIndicator = GObject.registerClass(
                 if (symbol === Clutter.KEY_Escape) {
                     const currentText = this._searchEntry.get_text();
                     if (currentText && currentText.length > 0) {
+                        this._isResettingSearch = true;
                         this._searchEntry.set_text('');
+                        this._isResettingSearch = false;
                         return Clutter.EVENT_STOP;
                     }
                 }
@@ -1018,11 +1209,15 @@ const ClipboardIndicator = GObject.registerClass(
                 overlay_scrollbars: true,
                 hscrollbar_policy: St.PolicyType.NEVER,
                 vscrollbar_policy: St.PolicyType.AUTOMATIC,
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
             });
-            this._scrollView.style = `height: ${this._settings.get_int('window-height') || 500}px`;
+            this._scrollView.style = `height: ${this._getPopupHeight()}px`;
 
             this._itemsBox = new St.BoxLayout({
                 vertical: true,
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
                 style_class: 'clipo-items-box',
             });
             this._scrollView.add_child(this._itemsBox);
@@ -1040,6 +1235,7 @@ const ClipboardIndicator = GObject.registerClass(
             const footerBox = new St.BoxLayout({
                 vertical: false,
                 x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
                 style_class: 'clipo-footer-box',
             });
 
@@ -1052,7 +1248,7 @@ const ClipboardIndicator = GObject.registerClass(
                 }),
                 can_focus: true,
             });
-            this._privateButton.connect('clicked', () => this._togglePrivateMode());
+            this._connectTrackedSignal(this._privateButton, 'clicked', () => this._togglePrivateMode());
             if (typeof this._privateButton.set_accessible_name === 'function')
                 this._privateButton.set_accessible_name(_('Toggle private mode'));
             else
@@ -1071,7 +1267,7 @@ const ClipboardIndicator = GObject.registerClass(
                 }),
                 can_focus: true,
             });
-            this._settingsButton.connect('clicked', () => this._openSettings());
+            this._connectTrackedSignal(this._settingsButton, 'clicked', () => this._openSettings());
             footerBox.add_child(this._settingsButton);
 
             footerItem.add_child(footerBox);
@@ -1083,13 +1279,7 @@ const ClipboardIndicator = GObject.registerClass(
                 if (open) {
                     this._onMenuOpened();
                 } else {
-                    if (this._itemsBox) {
-                        for (const item of this._itemsBox.get_children()) {
-                            if (typeof item._hideImagePreview === 'function') {
-                                item._hideImagePreview();
-                            }
-                        }
-                    }
+                    this._hideActiveImagePreview();
                 }
             });
 
@@ -1165,11 +1355,11 @@ const ClipboardIndicator = GObject.registerClass(
                         this._updateIndicatorDisplay();
                         break;
                     case 'window-width':
-                        this.menu.actor.style = `width: ${settings.get_int('window-width')}px`;
+                        this.menu.actor.style = `width: ${this._getPopupWidth()}px`;
                         break;
                     case 'window-height':
                         if (this._scrollView)
-                            this._scrollView.style = `height: ${settings.get_int('window-height')}px`;
+                            this._scrollView.style = `height: ${this._getPopupHeight()}px`;
                         break;
                     case 'history-size':
                     case 'cache-size':
@@ -1286,7 +1476,12 @@ const ClipboardIndicator = GObject.registerClass(
                     if (!self._settings) return;
 
                     if (bytes && bytes.get_size() > 0) {
-                        const imageData = toGBytes(bytes);
+                        // Defensive copy: the clipboard owns the backing buffer
+                        // of `bytes` and may free it when content changes. We
+                        // must copy the data immediately to avoid a dangling
+                        // GBytes reference that causes SIGSEGV during GC
+                        // (g_bytes_unref on already-freed memory).
+                        const imageData = new GLib.Bytes(bytes.get_data());
                         if (self._settings.get_boolean('has-text-extractor-extension')) {
                             self._schedulePendingImageCapture(imageData, mimeType);
                         } else {
@@ -1731,14 +1926,22 @@ const ClipboardIndicator = GObject.registerClass(
         _addEntry(entry) {
             this._history.prepend(entry);
 
+            let savePromise = null;
             if (entry.type === 'text') {
-                this._store.saveTextEntry(entry);
+                savePromise = this._store.saveTextEntry(entry);
             } else {
-                this._store.saveImageEntry(entry);
+                savePromise = this._store.saveImageEntry(entry);
             }
 
             this._pruneHistory();
             this._refreshMenu();
+
+            if (entry.type === 'image' && savePromise && typeof savePromise.then === 'function') {
+                savePromise.then(() => {
+                    if (this._isAlive() && this._isMenuOpen())
+                        this._refreshMenu(true);
+                }).catch(e => logWarn('Could not refresh image thumbnail after save:', e));
+            }
         }
 
         _computeHash(text) {
@@ -1934,6 +2137,9 @@ const ClipboardIndicator = GObject.registerClass(
         }
 
         _deleteEntry(entry) {
+            if (entry.menuItem)
+                entry.menuItem._hideImagePreview();
+
             if (entry.pinned) {
                 this._pinned.remove(entry);
             } else {
@@ -2008,12 +2214,7 @@ const ClipboardIndicator = GObject.registerClass(
 
         _performClearHistory() {
             this._selectedEntry = null;
-            const items = this._history.toArray();
-            for (const entry of items) {
-                if (entry.menuItem) {
-                    entry.menuItem.destroy();
-                }
-            }
+            this._hideActiveImagePreview();
             this._history.clear();
             this._store.clearNonPinned();
             this._refreshMenu();
@@ -2023,7 +2224,9 @@ const ClipboardIndicator = GObject.registerClass(
             if (!this._isAlive())
                 return;
 
-            if (this._menuNeedsRefresh)
+            const searchWasReset = this._resetSearchState();
+
+            if (this._menuNeedsRefresh || searchWasReset)
                 this._refreshMenu(true);
 
             this._resetScrollToTop();
@@ -2057,6 +2260,25 @@ const ClipboardIndicator = GObject.registerClass(
             });
             this._focusTimeout = sourceId;
             this._sourceIds.add(sourceId);
+        }
+
+        _resetSearchState() {
+            const hadSearch = Boolean(
+                this._searchQuery ||
+                this._searchResults ||
+                (this._searchEntry && this._searchEntry.get_text().length > 0)
+            );
+
+            this._searchQuery = '';
+            this._searchResults = null;
+
+            if (this._searchEntry && this._searchEntry.get_text().length > 0) {
+                this._isResettingSearch = true;
+                this._searchEntry.set_text('');
+                this._isResettingSearch = false;
+            }
+
+            return hadSearch;
         }
 
         _resetScrollToTop() {
@@ -2207,7 +2429,7 @@ const ClipboardIndicator = GObject.registerClass(
         }
 
         _onSearchChanged() {
-            if (!this._searchEntry) {
+            if (this._isResettingSearch || !this._searchEntry) {
                 return;
             }
 
@@ -2278,6 +2500,15 @@ const ClipboardIndicator = GObject.registerClass(
             return this._menuIsOpen || Boolean(this.menu?.isOpen);
         }
 
+        _hideActiveImagePreview(exceptItem = null) {
+            if (this._activePreviewItem && this._activePreviewItem !== exceptItem) {
+                this._activePreviewItem._hideImagePreview();
+            }
+
+            if (!exceptItem)
+                this._activePreviewItem = null;
+        }
+
         _refreshMenu(force = false) {
             if (!this._isAlive() || !this._itemsBox)
                 return;
@@ -2301,6 +2532,7 @@ const ClipboardIndicator = GObject.registerClass(
                 this._selectedEntry = null;
             }
 
+            this._hideActiveImagePreview();
             this._itemsBox.destroy_all_children();
 
             let itemIndex = 0;
@@ -2497,6 +2729,23 @@ const ClipboardIndicator = GObject.registerClass(
             this._isDestroying = true;
 
             try {
+                this._hideActiveImagePreview();
+
+                if (this._store && typeof this._store.destroy === 'function') {
+                    try {
+                        this._store.destroy();
+                    } catch (_) { }
+                }
+
+                if (this._virtualKeyboard) {
+                    if (typeof this._virtualKeyboard.destroy === 'function') {
+                        try {
+                            this._virtualKeyboard.destroy();
+                        } catch (_) { }
+                    }
+                    this._virtualKeyboard = null;
+                }
+
                 if (this._cursorAnchor) {
                     this._cursorAnchor.destroy();
                     this._cursorAnchor = null;
@@ -2558,8 +2807,10 @@ const ClipboardIndicator = GObject.registerClass(
                 }
                 this._sourceIds.clear();
 
-                if (this._ownerChangedId) {
-                    this._selection.disconnect(this._ownerChangedId);
+                if (this._ownerChangedId && this._selection) {
+                    try {
+                        this._selection.disconnect(this._ownerChangedId);
+                    } catch (_) { }
                     this._ownerChangedId = null;
                 }
 

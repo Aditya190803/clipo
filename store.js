@@ -235,10 +235,15 @@ export class Store {
         dataStream.set_byte_order(Gio.DataStreamByteOrder.LITTLE_ENDIAN);
 
         try {
-            while (true) {
+            readLoop: while (true) {
                 // Read operation type
-                const opType = dataStream.read_byte(null);
-                if (opType === 0) break; // EOF or invalid
+                let opType;
+                try {
+                    opType = dataStream.read_byte(null);
+                } catch (e) {
+                    break readLoop;
+                }
+                if (opType === 0) break readLoop; // EOF or invalid
 
                 switch (opType) {
                     case OP_TYPE_SAVE_TEXT: {
@@ -345,8 +350,8 @@ export class Store {
                     }
 
                     default:
-                        logWarn(`[Clipo] Unknown operation type: ${opType}`);
-                        break;
+                        logWarn(`[Clipo] Unknown operation type: ${opType}. Aborting load.`);
+                        break readLoop;
                 }
             }
         } catch (e) {
@@ -660,14 +665,17 @@ export class Store {
             return;
         }
 
-        logDebug('[Clipo] Compacting database...');
         this._isCompacting = true;
-        GLib.idle_add(GLib.PRIORITY_LOW, () => {
-            this._compact();
-            this._isCompacting = false;
-            // After compaction rewrites the log, re-seed the cached size
-            this._recomputeCacheSize();
-            return GLib.SOURCE_REMOVE;
+        this._queueOp(() => {
+            logDebug('[Clipo] Compacting database...');
+            try {
+                this._compact();
+            } catch (e) {
+                logError('[Clipo] Compacting error:', e);
+            } finally {
+                this._isCompacting = false;
+                this._recomputeCacheSize();
+            }
         });
     }
 
@@ -903,12 +911,10 @@ export class Store {
             }
 
             if (entry.type === 'image' && entry.imageData && !entry._imagePath) {
-                if (!entry._imagePath) {
-                    entry._imagePath = GLib.build_filenamev([
-                        this._imageCacheDir,
-                        `${entry.diskId}.${getImageExtension(entry.imageMimeType || 'image/png')}`,
-                    ]);
-                }
+                entry._imagePath = GLib.build_filenamev([
+                    this._imageCacheDir,
+                    `${entry.diskId}.${getImageExtension(entry.imageMimeType || 'image/png')}`,
+                ]);
 
                 const imageFile = Gio.File.new_for_path(entry._imagePath);
                 const imageStream = imageFile.replace(
@@ -980,5 +986,9 @@ export class Store {
 
         stream.close(null);
         this._uselessOpCount = 0;
+    }
+
+    destroy() {
+        // Pure Promise-based operations queue needs no active source cleanups.
     }
 }

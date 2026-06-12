@@ -79,17 +79,15 @@ export class ClipboardEntry {
     getHash() {
         if (this.type === 'text') {
             const text = this.plain || this.rich || '';
-            // For long strings, use length as hash (fast, low collision)
-            if (text.length > 500) {
-                return text.length;
+            // djb2 hash over max 1024 characters to keep it O(1) in time complexity
+            let hash = 5381;
+            const len = Math.min(text.length, 1024);
+            for (let i = 0; i < len; i++) {
+                hash = (hash * 33) ^ text.charCodeAt(i);
             }
-            // For short strings, compute simple hash
-            let hash = 0;
-            for (let i = 0; i < text.length; i++) {
-                hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                hash = hash & hash; // Convert to 32-bit integer
-            }
-            return hash;
+            // Incorporate string length to avoid identical prefixes with different lengths hashing the same
+            hash = (hash * 33) ^ text.length;
+            return hash & 0xFFFFFFFF; // Force to signed/unsigned 32-bit int
         }
         if (this.type === 'image') {
             if (this.imageData)
